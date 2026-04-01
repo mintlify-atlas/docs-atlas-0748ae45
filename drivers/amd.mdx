@@ -1,0 +1,244 @@
+---
+title: "AMD driver installation"
+description: How WinSux downloads, debloats, and installs AMD GPU drivers
+---
+
+<Note>
+DDU (Display Driver Uninstaller) has already removed all existing GPU drivers in Safe Mode before these steps run. This ensures a completely clean driver installation.
+</Note>
+
+<CardGroup cols={2}>
+  <Card title="NVIDIA drivers" icon="microchip" href="/drivers/nvidia">
+    Installation guide for NVIDIA GPUs
+  </Card>
+  <Card title="Intel drivers" icon="microchip" href="/drivers/intel">
+    Installation guide for Intel GPUs
+  </Card>
+</CardGroup>
+
+<Steps>
+
+  <Step title="Download the driver">
+    Chrome opens to the AMD driver download page. Download the latest Adrenalin Edition driver installer.
+
+    ```powershell
+    Start-Process "C:\Program Files\Google\Chrome\Application\chrome.exe" "https://www.amd.com/en/support/download/drivers.html"
+    ```
+  </Step>
+
+  <Step title="Select the downloaded file">
+    A Windows file picker opens automatically. Select the AMD driver installer you just downloaded.
+
+    ```powershell
+    Add-Type -AssemblyName System.Windows.Forms
+    $Dialog = New-Object System.Windows.Forms.OpenFileDialog
+    $Dialog.Filter = "All Files (*.*)|*.*"
+    $Dialog.ShowDialog() | Out-Null
+    $InstallFile = $Dialog.FileName
+    ```
+  </Step>
+
+  <Step title="Extract and debloat">
+    The installer is extracted with 7-Zip to `%SystemRoot%\Temp\amddriver`. Two types of configuration files are then modified to disable bundled components before installation.
+
+    ```powershell
+    & "C:\Program Files\7-Zip\7z.exe" x "$InstallFile" -o"$env:SystemRoot\Temp\amddriver" -y
+    ```
+
+    **XML config files** — `<Enabled>` and `<Hidden>` set to `false` for each:
+
+    | File | Purpose |
+    |---|---|
+    | `AMDAUEPInstaller.xml` | AMD User Experience Program installer |
+    | `AMDCOMPUTE.xml` | AMD Compute component |
+    | `AMDLinkDriverUpdate.xml` | AMD Link driver updater |
+    | `AMDRELAUNCHER.xml` | Installer relaunch helper |
+    | `AMDScoSupportTypeUpdate.xml` | SCO support type updater |
+    | `AMDUpdater.xml` | AMD software auto-updater |
+    | `AMDUWPLauncher.xml` | UWP app launcher |
+    | `EnableWindowsDriverSearch.xml` | Windows Update driver search enabler |
+    | `InstallUEP.xml` | User Experience Program install |
+    | `ModifyLinkUpdate.xml` | AMD Link update modifier |
+
+    ```powershell
+    $content = $content -replace '<Enabled>true</Enabled>', '<Enabled>false</Enabled>'
+    $content = $content -replace '<Hidden>true</Hidden>', '<Hidden>false</Hidden>'
+    ```
+
+    **JSON manifest files** — `"InstallByDefault"` set to `"No"` for all components:
+
+    | File | Purpose |
+    |---|---|
+    | `Config\InstallManifest.json` | Main install component manifest |
+    | `Bin64\cccmanifest_64.json` | 64-bit Catalyst Control Center manifest |
+
+    ```powershell
+    $content = $content -replace '"InstallByDefault"\s*:\s*"Yes"', '"InstallByDefault" : "No"'
+    ```
+  </Step>
+
+  <Step title="Install">
+    The driver is installed silently using `ATISetup.exe`.
+
+    ```powershell
+    Start-Process -Wait "$env:SystemRoot\Temp\amddriver\Bin64\ATISetup.exe" -ArgumentList "-INSTALL -VIEW:2" -WindowStyle Hidden
+    ```
+
+    | Flag | Effect |
+    |---|---|
+    | `-INSTALL` | Run the install operation |
+    | `-VIEW:2` | Silent view mode (no UI) |
+  </Step>
+
+  <Step title="Post-install cleanup">
+    Startup entries, scheduled tasks, services, bloatware, and leftover folders are removed after installation.
+
+    ```powershell
+    # Remove AMDNoiseSuppression startup entry
+    reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "AMDNoiseSuppression" /f
+
+    # Remove StartRSX RunOnce entry
+    reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /v "StartRSX" /f
+
+    # Remove StartCN scheduled task
+    Unregister-ScheduledTask -TaskName "StartCN" -Confirm:$false
+    ```
+
+    **Services deleted** (stopped then removed):
+
+    | Service | Description |
+    |---|---|
+    | `AMD Crash Defender Service` | AMD crash reporting service |
+    | `amdfendr` | AMD Crash Defender kernel driver |
+    | `amdfendrmgr` | AMD Crash Defender manager driver |
+    | `amdacpbus` | AMD Audio Coprocessor DSP driver |
+    | `AMDSAFD` | AMD Streaming Audio Function Driver |
+    | `AtiHDAudioService` | AMD HD Audio service driver |
+
+    ```powershell
+    # Uninstall AMD Install Manager via MSI
+    $guid = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*" |
+      Where-Object { $_.DisplayName -like "*AMD Install Manager*" }).PSChildName
+    Start-Process "msiexec.exe" -ArgumentList "/x $guid /qn /norestart" -Wait
+
+    # Remove AMD Bug Report Tool
+    Remove-Item "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\AMD Bug Report Tool" -Recurse -Force
+    Remove-Item "C:\Windows\SysWOW64\AMDBugReportTool.exe" -Force
+
+    # Remove AMD driver cache folder
+    Remove-Item "C:\AMD" -Recurse -Force
+
+    # Move start menu shortcut out of subfolder
+    Move-Item -Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\AMD Software...\AMD Software....lnk" `
+      -Destination "$env:ProgramData\Microsoft\Windows\Start Menu\Programs" -Force
+    ```
+  </Step>
+
+  <Step title="Initialize AMD Radeon Software settings">
+    AMD Radeon Software is opened and then closed to allow it to write its initial settings files. Without this step, registry-based settings applied in the next step will not persist.
+
+    ```powershell
+    Start-Process "C:\Program Files\AMD\CNext\CNext\RadeonSoftware.exe"
+    Start-Sleep -Seconds 15
+    Stop-Process -Name "RadeonSoftware" -Force
+    Start-Sleep -Seconds 2
+    ```
+
+    <Warning>
+      You may see a `rsservcmd.exe` error during this step. This is expected and can be ignored.
+    </Warning>
+  </Step>
+
+  <Step title="Apply registry settings">
+    Performance and preference settings are written to `HKCU\Software\AMD\CN` and the GPU adapter's `UMD` and `power_v1` registry subkeys.
+
+    **System**
+
+    ```reg
+    ; Manual check for updates only
+    [HKCU\Software\AMD\CN]
+    "AutoUpdate"=dword:00000000
+    ```
+
+    **Graphics**
+
+    ```reg
+    ; Custom graphics profile
+    [HKCU\Software\AMD\CN]
+    "WizardProfile"="PROFILE_CUSTOM"
+    ```
+
+    ```reg
+    ; Wait for Vertical Refresh — Always Off
+    ; Applied to all UMD subkeys under {4d36e968-e325-11ce-bfc1-08002be10318}
+    "VSyncControl"=hex:30,00
+
+    ; Texture Filtering Quality — Performance
+    "TFQ"=hex:32,00
+
+    ; Tessellation Mode — Override application settings
+    "Tessellation"=hex:31,00
+
+    ; Maximum Tessellation Level — Off
+    "Tessellation_OPTION"=hex:32,00
+    ```
+
+    **Display**
+
+    ```reg
+    ; Accept Custom Resolution EULA
+    [HKCU\Software\AMD\CN\CustomResolutions]
+    "EulaAccepted"="true"
+
+    ; Accept Display Override EULA
+    [HKCU\Software\AMD\CN\DisplayOverride]
+    "EulaAccepted"="true"
+    ```
+
+    ```reg
+    ; Vari-Bright — Maximize Brightness (applied to power_v1 subkeys)
+    "abmlevel"=hex:00,00,00,00
+    ```
+
+    **Preferences**
+
+    ```reg
+    [HKCU\Software\AMD\CN]
+    ; Disable system tray icon
+    "SystemTray"="false"
+
+    ; Disable toast notifications
+    "CN_Hide_Toast_Notification"="true"
+
+    ; Disable animation effects
+    "AnimationEffect"="false"
+    ```
+
+    **Notifications cleared**
+
+    ```powershell
+    # Clear all existing notifications
+    reg delete "HKCU\Software\AMD\CN\Notification" /f
+    reg add    "HKCU\Software\AMD\CN\Notification" /f
+
+    # Mark FreeSync, Overlay, and VirtualSuperResolution notifications as already seen
+    reg add "HKCU\Software\AMD\CN\FreeSync"                /v "AlreadyNotified" /t REG_DWORD /d "1" /f
+    reg add "HKCU\Software\AMD\CN\OverlayNotification"     /v "AlreadyNotified" /t REG_DWORD /d "1" /f
+    reg add "HKCU\Software\AMD\CN\VirtualSuperResolution"  /v "AlreadyNotified" /t REG_DWORD /d "1" /f
+    ```
+
+    | Setting | Value | Effect |
+    |---|---|---|
+    | `AutoUpdate` | `0` | Disables automatic driver update checks |
+    | `WizardProfile` | `PROFILE_CUSTOM` | Sets graphics profile to Custom |
+    | `VSyncControl` | `3000` | Wait for Vertical Refresh: Always Off |
+    | `TFQ` | `3200` | Texture Filtering Quality: Performance |
+    | `Tessellation` | `3100` | Tessellation: Override application settings |
+    | `Tessellation_OPTION` | `3200` | Maximum tessellation level: Off |
+    | `abmlevel` | `00000000` | Vari-Bright: Maximize Brightness |
+    | `SystemTray` | `false` | Disables system tray icon |
+    | `CN_Hide_Toast_Notification` | `true` | Disables toast notifications |
+    | `AnimationEffect` | `false` | Disables UI animation effects |
+  </Step>
+
+</Steps>

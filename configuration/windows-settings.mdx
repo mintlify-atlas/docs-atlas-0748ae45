@@ -1,0 +1,477 @@
+---
+title: "Windows settings"
+description: Registry tweaks, UI changes, and system configuration applied by WinSux
+---
+
+WinSux applies a large set of registry changes, UI adjustments, and system configuration tweaks during the second and third boots. This page documents every category of change with the relevant registry paths.
+
+## Start menu and taskbar
+
+### Classic context menu
+
+The Windows 11 modern context menu is replaced with the classic full context menu:
+
+```reg
+[HKEY_CURRENT_USER\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32]
+@=""
+```
+
+### Context menu items removed
+
+<AccordionGroup>
+  <Accordion title="All removed context menu entries">
+
+| Item | Registry operation |
+|------|--------------------|
+| Customize this folder | `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer` → `NoCustomizeThisFolder=1` |
+| Pin to Quick Access | `HKCR\Folder\shell\pintohome` deleted |
+| Add to Favorites | `HKCR\*\shell\pintohomefile` deleted |
+| Troubleshoot Compatibility | `HKCR\exefile\shellex\ContextMenuHandlers\Compatibility` deleted |
+| Open in Terminal | `{9F156763-7844-4DC4-B2B1-901F640F5155}` added to `Shell Extensions\Blocked` |
+| Scan with Defender | `{09A47860-11B0-4DA5-AFA5-26D86198A780}` added to `Shell Extensions\Blocked` |
+| Give access to | `{f81e9010-6ea4-11ce-a7ff-00aa003ca9f6}` added to `Shell Extensions\Blocked` |
+| Include in library | `HKCR\Folder\ShellEx\ContextMenuHandlers\Library Location` deleted |
+| Share | `HKCR\AllFilesystemObjects\shellex\ContextMenuHandlers\ModernSharing` deleted |
+| Restore previous versions | `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer` → `NoPreviousVersionsPage=1` |
+| Send to | `HKCR\AllFilesystemObjects\shellex\ContextMenuHandlers\SendTo` deleted, `HKCR\UserLibraryFolder\shellex\ContextMenuHandlers\SendTo` deleted |
+
+  </Accordion>
+</AccordionGroup>
+
+### Taskbar icons
+
+All system tray icons are set to visible (`IsPromoted=1`) by iterating over every subkey of:
+
+```
+HKEY_CURRENT_USER\Control Panel\NotifyIconSettings
+```
+
+### Start Menu layout
+
+**Windows 10:** A blank `StartMenuLayout.xml` is applied via group policy, then the policy is immediately relaxed. This clears all pinned tiles without locking the layout permanently.
+
+**Windows 11:** The `start2.bin` file is replaced with a pre-built binary (decoded from `start2.txt` using `certutil`) that has no pinned items.
+
+### Apps list view
+
+The Start Menu app list is set to list mode instead of grid:
+
+```reg
+[HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Start]
+"AllAppsViewMode"=dword:00000002
+```
+
+### Accessibility folders
+
+The Accessibility and Accessories folders in the Start Menu are hidden using the `+h` file attribute, along with all their contents.
+
+### Start Menu shortcuts created
+
+WinSux adds five shortcuts to `%ProgramData%\Microsoft\Windows\Start Menu\Programs` so these locations are reachable directly from the Start Menu:
+
+| Shortcut | Target |
+|----------|--------|
+| Start Menu Shortcuts 1 | `%ProgramData%\Microsoft\Windows\Start Menu\Programs` |
+| Start Menu Shortcuts 2 | `%AppData%\Microsoft\Windows\Start Menu\Programs` |
+| Startup Programs 1 | `%AppData%\Microsoft\Windows\Start Menu\Programs\Startup` |
+| Startup Programs 2 | `%ProgramData%\Microsoft\Windows\Start Menu\Programs\StartUp` |
+| Recycle Bin | `::{645ff040-5081-101b-9f08-00aa002f954e}` |
+
+---
+
+## Lock screen and wallpaper
+
+A pure black JPEG is generated at runtime matching the primary monitor resolution using `System.Drawing`, saved to `C:\Windows\Black.jpg`, and applied to both the desktop wallpaper and the lock screen.
+
+```powershell
+$screenWidth  = [System.Windows.Forms.SystemInformation]::PrimaryMonitorSize.Width
+$screenHeight = [System.Windows.Forms.SystemInformation]::PrimaryMonitorSize.Height
+$bitmap = New-Object System.Drawing.Bitmap $screenWidth, $screenHeight
+$graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+$graphics.FillRectangle([System.Drawing.Brushes]::Black, 0, 0, $bitmap.Width, $bitmap.Height)
+$bitmap.Save("C:\Windows\Black.jpg")
+```
+
+The lock screen image is set via PersonalizationCSP:
+
+```reg
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\PersonalizationCSP]
+"LockScreenImagePath"="C:\\Windows\\Black.jpg"
+"LockScreenImageStatus"=dword:00000001
+```
+
+The wallpaper is set via the Desktop registry key, then immediately applied:
+
+```reg
+[HKEY_CURRENT_USER\Control Panel\Desktop]
+"Wallpaper"="C:\\Windows\\Black.jpg"
+```
+
+---
+
+## Notepad
+
+Notepad settings are written directly into the app's `settings.dat` hive file after stopping the process. The hive is loaded temporarily under `HKLM\Settings`.
+
+| Setting | Value | Effect |
+|---------|-------|--------|
+| `OpenFile` | `hex(5f5e104):01,...` | Opens the last file on launch |
+| `RewriteEnabled` | `hex(5f5e10b):00,...` | Disables the AI Rewrite feature |
+
+---
+
+## Windows Store
+
+The Store app's `settings.dat` hive is loaded and modified directly.
+
+| Setting | Value | Effect |
+|---------|-------|--------|
+| `AutoDownload` (`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsStore\WindowsUpdate`) | `2` | Disables automatic app updates |
+| `VideoAutoplay` | `hex(5f5e10b):00,...` | Disables video autoplay |
+| `EnableAppInstallNotifications` | `hex(5f5e10b):00,...` | Disables app installation notifications |
+| `PersonalizationEnabled` | `hex(5f5e10b):00,...` | Disables personalized experiences |
+
+<Note>
+  The Store settings page (`ms-windows-store:settings`) is opened briefly before writing these values so that the settings.dat file is initialized. The Store process is then stopped before the hive is mounted.
+</Note>
+
+---
+
+## App actions and Copilot
+
+App actions (also called Cross-Device Resume) are disabled for Paint, Photos, and the CBS system app by writing to the `MicrosoftWindows.Client.CBS` settings hive.
+
+The following processes are stopped before the hive is modified:
+
+`AppActions`, `CrossDeviceResume`, `DesktopStickerEditorWin32Exe`, `DiscoveryHubApp`, `FESearchHost`, `SearchHost`, `SoftLandingTask`, `TextInputHost`, `VisualAssistExe`, `WebExperienceHostApp`, `WindowsBackupClient`, `WindowsMigration`
+
+---
+
+## Sign-in options
+
+| Setting | Registry path | Value | Effect |
+|---------|--------------|-------|--------|
+| Allow password sign-in | `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\PasswordLess\Device` → `DevicePasswordLessBuildVersion` | `0` | Enables password sign-in even on passwordless-capable hardware |
+| No sign-in required after wake | `powercfg /setacvalueindex scheme_current sub_none consolelock 0` | — | Screen does not lock when waking from sleep |
+| Default terminal to conhost | `HKCU\Console\%Startup` → `DelegationConsole` / `DelegationTerminal` | `{B23D10C0-E52E-411E-9D5B-C09FDF709C7D}` | Prevents Windows Terminal from opening by default |
+
+---
+
+## Windows Update
+
+Updates are paused for 365 days from the time of installation:
+
+```powershell
+$pause = (Get-Date).AddDays(365).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings" `
+  -Name "PauseUpdatesExpiryTime" -Value $pause
+```
+
+Driver updates are blocked via multiple policy keys:
+
+<AccordionGroup>
+  <Accordion title="Driver update block registry keys">
+
+```reg
+[HKEY_LOCAL_MACHINE\Software\Policies\Microsoft\Windows\Device Metadata]
+"PreventDeviceMetadataFromNetwork"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\Software\Policies\Microsoft\Windows\DeviceInstall\Settings]
+"DisableSendGenericDriverNotFoundToWER"=dword:00000001
+"DisableSendRequestAdditionalSoftwareToWER"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\Software\Policies\Microsoft\Windows\DriverSearching]
+"SearchOrderConfig"=dword:00000000
+
+[HKEY_LOCAL_MACHINE\Software\Policies\Microsoft\Windows\WindowsUpdate]
+"SetAllowOptionalContent"=dword:00000000
+"AllowTemporaryEnterpriseFeatureControl"=dword:00000000
+"ExcludeWUDriversInQualityUpdate"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\Software\Policies\Microsoft\Windows\WindowsUpdate\AU]
+"IncludeRecommendedUpdates"=dword:00000000
+"EnableFeaturedSoftware"=dword:00000000
+```
+
+  </Accordion>
+</AccordionGroup>
+
+Windows driver searching is also disabled independently during the WinSux.ps1 stage:
+
+```reg
+[HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\DriverSearching]
+"SearchOrderConfig"=dword:00000000
+```
+
+---
+
+## Network adapters
+
+The following protocol bindings are disabled on all network adapters. Only IPv4 (`ms_tcpip`) is left active.
+
+| Component ID | Protocol |
+|-------------|----------|
+| `ms_lldp` | Link Layer Discovery Protocol |
+| `ms_lltdio` | Link Layer Topology Discovery I/O driver |
+| `ms_implat` | Network Platform |
+| `ms_rspndr` | Link Layer Topology Discovery Responder |
+| `ms_tcpip6` | IPv6 |
+| `ms_server` | File and Printer Sharing |
+| `ms_msclient` | Client for Microsoft Networks |
+| `ms_pacer` | QoS Packet Scheduler |
+
+---
+
+## Startup cleanup
+
+All startup locations are cleared to prevent third-party programs from running at logon.
+
+<AccordionGroup>
+  <Accordion title="Registry keys cleared">
+
+```powershell
+# HKCU
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\RunNotification" /f
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce" /f
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /f
+
+# HKLM
+reg delete "HKLM\Software\Microsoft\Windows\CurrentVersion\RunOnce" /f
+reg delete "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /f
+reg delete "HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce" /f
+reg delete "HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run" /f
+```
+
+All keys are immediately recreated (empty) after deletion.
+
+  </Accordion>
+</AccordionGroup>
+
+Startup folders are deleted and recreated empty:
+
+- `%AppData%\Microsoft\Windows\Start Menu\Programs\Startup`
+- `%ProgramData%\Microsoft\Windows\Start Menu\Programs\StartUp`
+
+All non-Microsoft scheduled tasks are removed. The task tree at `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tree` is enumerated and every root-level key that is not `Microsoft` is deleted via `Run-Trusted`, then the corresponding files under `C:\Windows\System32\Tasks` are also removed.
+
+---
+
+## Miscellaneous
+
+| Setting | Command / Registry | Effect |
+|---------|--------------------|--------|
+| Memory compression | `Disable-MMAgent -MemoryCompression` | Disables RAM compression; reduces CPU overhead at the cost of higher physical memory usage |
+| BitLocker | `Disable-BitLocker` on all volumes | Decrypts all BitLocker-protected volumes |
+| Windows Backup (CDPUserSvc) | `HKLM\SYSTEM\ControlSet001\Services\CDPUserSvc` → `Start=4` | Disables the Connected Devices Platform user service |
+| Priority notifications | CloudStore hive modified | Disables Focus Assist priority notification list |
+| Defrag scheduled task | `schtasks /Change /TN "ScheduledDefrag" /Disable` | Disables the automatic defragmentation task |
+| Defender scheduled tasks | `schtasks /Change /Disable` | Disables four Defender maintenance tasks: Cache Maintenance, Cleanup, Scheduled Scan, Verification, and ExploitGuard MDM policy Refresh |
+| Color management | `AutoColorManagementEnabled=0` per monitor | Disables automatic color management for apps |
+| Taskbar items | Quick Launch folder removed | Removes all pinned taskbar shortcuts |
+
+---
+
+## Registry file (reg.reg)
+
+During Phase 3, WinSux imports a comprehensive registry file (`reg.reg`) that applies hundreds of additional settings. These are grouped by category below.
+
+<AccordionGroup>
+<Accordion title="Taskbar and personalization">
+
+| Setting | Effect |
+|---------|--------|
+| Taskbar alignment | Left-aligned (TaskbarAl=0) |
+| Search removed from taskbar | SearchboxTaskbarMode=0 |
+| Task View removed | ShowTaskViewButton=0 |
+| Chat/Teams removed | TaskbarMn=0 |
+| Copilot button removed | ShowCopilotButton=0 |
+| Widgets removed | AllowNewsAndInterests=0 |
+| Share window button removed | TaskbarSn=0 |
+| Meet Now removed | HideSCAMeetNow=1 |
+| End Task in taskbar | Enabled (TaskbarEndTask=1) |
+| Desktop preview | Disabled (TaskbarSd=0) |
+| Dark mode | Apps and system (AppsUseLightTheme=0, SystemUsesLightTheme=0) |
+| Transparency | Disabled (EnableTransparency=0) |
+| Accent color | Dark grey (#191919) |
+| Recycle Bin | Hidden from desktop |
+| Security tray icon | Disabled (SecurityHealth startup entry disabled) |
+| Dynamic Lighting (RGB) | Disabled (AmbientLightingEnabled=0) |
+| Snap Assist | Disabled (SnapAssist, EnableSnapBar, EnableSnapAssistFlyout, EnableTaskGroups, SnapFill, JointResize all 0) |
+
+</Accordion>
+<Accordion title="Start menu">
+
+| Setting | Effect |
+|---------|--------|
+| Recommended section | Hidden (HideRecommendedSection=1) |
+| Recently added apps | Hidden (HideRecentlyAddedApps=1) |
+| Most used apps | Hidden (ShowOrHideMostUsedApps=2) |
+| Recent files in Jump Lists | Disabled (Start_TrackDocs=0) |
+| Browsing history suggestions | Disabled (Start_RecoPersonalizedSites=0) |
+| Account notifications | Disabled (Start_AccountNotifications=0) |
+| AI recommendations | Disabled (Start_IrisRecommendations=0) |
+| Recently opened items | Disabled (ShowRecentList=0) |
+| Apps list view | List mode (AllAppsViewMode=2) |
+| Phone Companion | Disabled |
+| Feature flags | Four FeatureManagement overrides applied for new Start behavior |
+
+</Accordion>
+<Accordion title="Performance and visual effects">
+
+| Setting | Effect |
+|---------|--------|
+| Visual effects | Custom — disables fade menus, tooltips, shadows, combo box slide, smooth-scroll; keeps thumbnails and animate controls (required for Instagram scrolling) |
+| Window animations | Disabled (MinAnimate=0) |
+| Taskbar animations | Disabled |
+| Aero Peek | Disabled (EnableAeroPeek=0) |
+| Taskbar thumbnail cache | Disabled (AlwaysHibernateThumbnails=0) |
+| DWM window drag | Disabled (DragFullWindows=0) |
+| DPI scaling | 100% (LogPixels=96), per-process DPI disabled |
+| Font smoothing | Enabled (FontSmoothing=2) |
+| Process priority | Programs preferred (Win32PrioritySeparation=38) |
+| Hardware Accelerated GPU Scheduling | Enabled (HwSchMode=2) |
+| Variable Refresh Rate | Disabled; windowed game optimizations enabled |
+| Menu show delay | 0 ms |
+
+</Accordion>
+<Accordion title="Privacy and telemetry">
+
+| Setting | Effect |
+|---------|--------|
+| Telemetry | Disabled (AllowTelemetry=0) |
+| Tailored experiences | Disabled |
+| Activity history | Disabled (PublishUserActivities=0) |
+| Find My Device | Disabled |
+| Location | Denied for all apps |
+| Camera | Allowed |
+| Microphone | Allowed |
+| Voice activation | Disabled |
+| App permissions | Denied: notifications, contacts, calendar, phone calls, email, messaging, radios, Bluetooth sync, app diagnostics, file libraries, AI models, passkeys |
+| Feedback frequency | Never |
+| Language list exposure | Disabled (HttpAcceptLanguageOptOut=1) |
+| App launch tracking | Disabled |
+| Personal inking/typing dictionary | Disabled |
+| Search history | Disabled |
+| Cloud content search | Disabled (AAD and MSA) |
+| Delivery Optimization | Disabled (DownloadMode=0) |
+
+</Accordion>
+<Accordion title="Gaming">
+
+| Setting | Effect |
+|---------|--------|
+| Game Bar / Game DVR | Disabled (GameDVR_Enabled=0, AppCaptureEnabled=0) |
+| Xbox controller Guide button | Disabled (UseNexusForGameBarEnabled=0) |
+| Game Mode | Enabled (AutoGameModeEnabled=1) |
+| ms-gamebar protocol | Redirected to systray.exe — prevents Game Bar popup on Xbox controller connect |
+| Game Bar Presence Writer | Deactivated (ActivationType=0) |
+
+</Accordion>
+<Accordion title="Copilot and AI features">
+
+| Setting | Effect |
+|---------|--------|
+| Windows Copilot | Disabled system-wide (TurnOffWindowsCopilot=1) |
+| Recall | Disabled (AllowRecallEnablement=0) |
+| AI data analysis | Disabled (DisableAIDataAnalysis=1) |
+| Click To Do | Disabled (DisableClickToDo=1) |
+| Paint AI (Generative Fill, Cocreator, Image Creator) | Disabled via policy |
+| Notepad AI features | Disabled (DisableAIFeatures=1) |
+| Bing Chat | Cleared (IsUserEligible=0) |
+| Widgets / News and Interests | Disabled |
+
+</Accordion>
+<Accordion title="Notifications">
+
+| Setting | Effect |
+|---------|--------|
+| All toast notifications | Disabled (ToastEnabled=0) |
+| Toast above lock screen | Disabled |
+| Notification sound | Disabled |
+| App notifications | SkyDrive, AutoPlay, Security Center, Settings, Capability Access, Startup Apps — all disabled |
+| Focus Assist | Set to unrestricted; all quiet moment profiles disabled |
+| Suggested actions | Disabled (SmartClipboard Disabled=1) |
+
+</Accordion>
+<Accordion title="Mouse and input">
+
+| Setting | Effect |
+|---------|--------|
+| Mouse pointer precision | Disabled (MouseSpeed=0, all thresholds 0) |
+| Mouse pointer scheme | Cleared — removes cursor theme |
+| Mouse sensitivity | 10 (Windows default mid-point) |
+| Mouse acceleration curves | Linear (no acceleration with EPP off) |
+| Background polling rate cap | Removed (RawMouseThrottleEnabled=0) |
+| Autoplay | Disabled |
+| Touch keyboard | Never shown |
+| Language hotkey | Disabled |
+| Typing insights | Disabled |
+| Voice typing mic button | Disabled |
+
+</Accordion>
+<Accordion title="File Explorer and system">
+
+| Setting | Effect |
+|---------|--------|
+| File Explorer opens to | This PC |
+| Frequent folders | Hidden in Quick Access |
+| File extensions | Shown (HideFileExt=0) |
+| Full path in title bar | Enabled (FullPath=1) |
+| Preview handlers | Disabled |
+| Status bar | Disabled |
+| Sharing wizard | Disabled |
+| Network in navigation | Hidden |
+| 3D Objects in This PC | Removed |
+| Quick Access | Disabled (HubMode=1) |
+| Gallery in navigation | Hidden |
+| Alt+Tab | Open windows only (no Edge tabs) |
+| Long path support | Enabled (LongPathsEnabled=1) |
+| BSOD extra info | Enabled (DisplayParameters=1) |
+| Windows Platform Binary Table | Disabled (DisableWpbtExecution=1) |
+| Web services in Explorer | Disabled (NoWebServices=1) |
+| Cross-device resume | Disabled |
+
+</Accordion>
+<Accordion title="Sound">
+
+| Setting | Effect |
+|---------|--------|
+| Sound scheme | None — all system sounds cleared |
+| Startup sound | Disabled (DisableStartupSound=1) |
+| Sound communications | Do nothing (UserDuckingPreference=3) |
+
+</Accordion>
+<Accordion title="Accessibility">
+
+| Setting | Effect |
+|---------|--------|
+| Narrator | All features disabled |
+| Sticky Keys, Toggle Keys, Sound Sentry | Disabled |
+| High Contrast | Disabled |
+| Magnifier follow modes | All disabled |
+| Print Screen opens Snipping Tool | Disabled |
+| Keyboard auto-repeat | Disabled |
+
+</Accordion>
+<Accordion title="Miscellaneous system settings">
+
+| Setting | Effect |
+|---------|--------|
+| Automatic maintenance | Disabled (MaintenanceDisabled=1) |
+| Windows Error Reporting | Disabled |
+| Remote Assistance | Disabled (fAllowToGetHelp=0) |
+| Clock change notifications | Disabled |
+| Maps auto-update | Disabled |
+| App archiving | Disabled |
+| Storage Sense | Disabled — no auto-delete of temp files, downloads, or recycle bin |
+| Background apps | Disabled for all UWP (LetAppsRunInBackground=2) |
+| Shared internet connection control | Disabled |
+| USB error notifications | Disabled |
+| Default printer management | Legacy mode |
+| Advertising/promotional content | All ContentDeliveryManager flags disabled |
+| Share across devices (CDP) | Disabled |
+| Recommended troubleshooter | Set to user preference |
+| Write with fingertip | Disabled |
+
+</Accordion>
+</AccordionGroup>

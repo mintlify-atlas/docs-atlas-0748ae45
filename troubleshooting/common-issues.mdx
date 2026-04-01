@@ -1,0 +1,163 @@
+---
+title: "Common issues"
+description: Solutions to common problems encountered when running WinSux.
+---
+
+<AccordionGroup>
+
+  <Accordion title='"Internet Connection Required" error on start'>
+    WinSux checks for internet connectivity at startup by pinging `8.8.8.8`. If the check fails, the script exits immediately.
+
+    ```powershell
+    if (!(Test-Connection -ComputerName "8.8.8.8" -Count 1 -Quiet -ErrorAction SilentlyContinue)) {
+        Write-Host "Internet Connection Required`n" -ForegroundColor Red
+        Pause
+        exit
+    }
+    ```
+
+    **Fix:** Ensure you have an active internet connection before running WinSux. If you are behind a firewall that blocks ICMP (ping), allow outbound ICMP or temporarily disable the firewall rule for the duration of the run.
+  </Accordion>
+
+  <Accordion title="Script won't run — execution policy error">
+    PowerShell's execution policy may be set to `Restricted`, which prevents running unsigned scripts.
+
+    **Option 1 — use the IWR one-liner.** This bypasses the execution policy for the current session only:
+
+    ```powershell
+    iwr https://github.com/FR33THYFR33THY/WinSux/raw/refs/heads/main/WinSux.ps1 -useb | iex
+    ```
+
+    **Option 2 — run `AllowScripts.cmd` as Administrator.** Choose option `1` to enable scripts. The script applies the following registry changes and unblocks all files in the current directory:
+
+    ```cmd
+    reg add "HKCR\Applications\powershell.exe\shell\open\command" /ve /t REG_SZ /d "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoLogo -ExecutionPolicy unrestricted -File \"%%1\"" /f
+    reg add "HKCU\SOFTWARE\Microsoft\PowerShell\1\ShellIds\Microsoft.PowerShell" /v "ExecutionPolicy" /t REG_SZ /d "Unrestricted" /f
+    reg add "HKLM\SOFTWARE\Microsoft\PowerShell\1\ShellIds\Microsoft.PowerShell" /v "ExecutionPolicy" /t REG_SZ /d "Unrestricted" /f
+    powershell -Command "Get-ChildItem -Path $PSScriptRoot -Recurse | Unblock-File"
+    ```
+
+    <Note>
+      You can revert to a restricted policy at any time by running `AllowScripts.cmd` and choosing option `2`.
+    </Note>
+  </Accordion>
+
+  <Accordion title="Script gets stuck or pauses unexpectedly">
+    A background process may be interfering, or a UAC prompt has appeared behind the terminal window.
+
+    **Fix:**
+    1. Check the taskbar for a minimized UAC prompt and approve it.
+    2. If the script is still stuck after several minutes, it may be safe to restart.
+    3. After restarting, check whether the `RunOnce` key is still present — if so, the next phase will resume automatically on next boot:
+
+    ```powershell
+    reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce"
+    ```
+  </Accordion>
+
+  <Accordion title="System stuck in Safe Mode after Phase 1">
+    `stepone.ps1` runs in Safe Mode via the Winlogon `Userinit` registry key. If the script failed before it could remove the Safe Boot BCD entry or restore `Userinit`, the system will keep booting into Safe Mode.
+
+    **Fix:** Boot into Safe Mode with Command Prompt, then run:
+
+    ```cmd
+    bcdedit /deletevalue {current} safeboot
+    reg add "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v "Userinit" /t REG_SZ /d "C:\WINDOWS\system32\userinit.exe," /f
+    ```
+
+    Then restart normally. Windows will boot into standard mode and Phase 2 (`steptwo.ps1`) will run via the `RunOnce` key.
+
+    <Warning>
+      Do not skip the `Userinit` restore step. Leaving it pointing at `stepone.ps1` will cause the script to run again on every Safe Mode login.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="DDU shows an error or doesn't run">
+    WinSux writes a preconfigured `Settings.xml` for Display Driver Uninstaller (DDU) and then sets it to **read-only** to prevent DDU from overwriting the config. In rare cases a permissions or path issue can prevent DDU from starting.
+
+    **Fix:** Run DDU manually from:
+
+    ```
+    %SystemRoot%\Temp\ddu\Display Driver Uninstaller.exe
+    ```
+
+    DDU will use the existing `Settings.xml`. If DDU complains that the config is read-only, that is expected — the file is intentionally locked.
+  </Accordion>
+
+  <Accordion title='AMD driver installation shows "RSSERVCMD.EXE ERROR"'>
+    This error is a known artifact of the silent AMD driver install process. WinSux explicitly acknowledges it in the script output:
+
+    ```
+    IGNORE RSSERVCMD.EXE ERROR
+    ```
+
+    **Fix:** Ignore it. The driver installs correctly despite the error message.
+  </Accordion>
+
+  <Accordion title="GPU driver not installing / Chrome doesn't open">
+    Phase 3 (`steptwo.ps1`) opens Chrome to the GPU vendor's driver download page and then displays a file picker to select the downloaded installer. If Chrome was not installed in Phase 1, or if the file picker was closed without selecting a file, driver installation will not complete.
+
+    **Fix:**
+    1. Install Chrome manually if it is missing.
+    2. Run `steptwo.ps1` directly as Administrator from:
+
+    ```
+    %SystemRoot%\Temp\steptwo.ps1
+    ```
+
+    Alternatively, download and install the GPU driver manually from your vendor's website and skip the WinSux driver step.
+  </Accordion>
+
+  <Accordion title="Edge is still present after running WinSux">
+    The Edge uninstall depends on Microsoft's uninstall string being present in the registry and Edge not running at the time. Some Windows builds automatically reinstall Edge after removal.
+
+    WinSux temporarily switches your system region to US (region code `244`) to expose the Edge uninstall string, runs the uninstall, then reverts your region. If EdgeUpdate was not fully unregistered before the uninstall ran, Edge may reappear.
+
+    **Fix:**
+    - Check whether EdgeUpdate services were removed. You can run the Edge uninstall commands from `steptwo.ps1` manually.
+    - If Edge keeps reinstalling, use a dedicated Edge removal tool such as [Winaero Tweaker](https://winaero.com/winaero-tweaker/) or the `remove-ms-edge` script.
+
+    <Note>
+      Your system region is automatically restored to its original value after the Edge removal step completes.
+    </Note>
+  </Accordion>
+
+  <Accordion title="Windows Defender keeps turning back on">
+    Defender settings — including Tamper Protection — can only be reliably disabled from Safe Mode running as `TrustedInstaller`. WinSux handles this in Phase 2 (`stepone.ps1`). If Phase 2 did not complete successfully, some Defender settings may not have been written.
+
+    Additionally, Windows updates can re-enable Defender settings. This is expected behavior from Microsoft and is not a WinSux bug.
+
+    **Fix:**
+    - Verify that Phase 2 ran to completion (no stuck Safe Mode, no error during the `DEFENDER SETTINGS` step).
+    - If Defender re-enables after a Windows update, you will need to re-run Phase 2, or apply the registry changes manually as TrustedInstaller.
+  </Accordion>
+
+  <Accordion title="Screen is black / wallpaper is black">
+    This is intentional. WinSux generates a black JPEG (`C:\Windows\Black.jpg`) and applies it as both the desktop wallpaper and the lock screen image for a clean, minimal look.
+
+    **Fix:** Go to **Settings → Personalization → Background** to set a different wallpaper. For the lock screen, go to **Settings → Personalization → Lock screen**.
+  </Accordion>
+
+  <Accordion title="Start menu pins are gone">
+    This is intentional. WinSux replaces the Start Menu layout with a blank template (no pinned apps) on both Windows 10 and Windows 11, giving you a clean starting point.
+
+    **Fix:** Pin your apps manually. On Windows 11, right-click an app and select **Pin to Start**.
+  </Accordion>
+
+  <Accordion title="Right-click context menu shows classic (Windows 10) style">
+    This is intentional. WinSux restores the classic context menu by registering the following shell extension:
+
+    ```
+    HKCU\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32
+    ```
+
+    **Fix:** To revert to the Windows 11 context menu, delete that registry key:
+
+    ```powershell
+    reg delete "HKCU\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}" /f
+    ```
+
+    Then restart Explorer or sign out and back in.
+  </Accordion>
+
+</AccordionGroup>

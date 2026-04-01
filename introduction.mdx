@@ -1,0 +1,83 @@
+---
+title: "Introduction"
+description: "WinSux is a one-click Windows 10/11 optimization script suite for power users, gamers, and enthusiasts."
+---
+
+WinSux is an automated PowerShell script suite that configures Windows 10 and 11 for maximum performance. It handles everything from installing core software and removing bloatware to configuring security settings, GPU drivers, power plans, and system timer resolution — all in a single run.
+
+<Warning>
+  WinSux makes significant and permanent system changes, including disabling Windows Defender real-time protection, Tamper Protection, Memory Integrity (VBS/HVCI), UAC, Smart App Control, SmartScreen, BitLocker, and removing Microsoft Edge, OneDrive, and most UWP apps. Only run WinSux if you understand what it does and are willing to accept these changes. Review the full source code at [https://github.com/FR33THYFR33THY/WinSux](https://github.com/FR33THYFR33THY/WinSux) before running.
+</Warning>
+
+## Who it's for
+
+WinSux is intended for:
+
+- **Gamers** who want reduced input latency, CPU unparking, and a clean GPU driver install via DDU
+- **Power users** who want full control over their Windows configuration without manual registry editing
+- **Enthusiasts** who prefer a minimal, bloat-free Windows install with optimized network, power, and storage settings
+
+It is not intended for users who rely on Windows security defaults, OneDrive cloud sync, Microsoft Edge, or automatic Windows Update for drivers.
+
+## Supported Windows versions
+
+WinSux supports all major editions of Windows 10 and 11:
+
+| Edition | Supported |
+|---------|-----------|
+| Windows 10 Home | Yes |
+| Windows 10 Pro | Yes |
+| Windows 10 LTSC | Yes |
+| Windows 10 IoT | Yes |
+| Windows 11 Home | Yes |
+| Windows 11 Pro | Yes |
+| Windows 11 LTSC | Yes |
+| Windows Server | Yes |
+
+## Requirements
+
+- Windows 10 or Windows 11 (any edition listed above)
+- Active internet connection — the script downloads software from GitHub, Google, and other sources during Phase 1
+- Administrator PowerShell or Windows Terminal session — the script will attempt to self-elevate, but starting elevated avoids a UAC prompt
+
+## What WinSux does
+
+WinSux runs in three automatic phases across two reboots:
+
+**Phase 1 — Initial setup (`WinSux.ps1`)**
+Downloads and installs 7-Zip, Google Chrome, DirectX, and Visual C++ redistributables (2005 through 2022 for both x86 and x64). Extracts and pre-configures DDU (Display Driver Uninstaller). Registers `stepone.ps1` to run automatically via Winlogon on the next Safe Mode boot, and `steptwo.ps1` via RunOnce for the boot after that. Then enables Safe Mode and restarts.
+
+**Phase 2 — Safe Mode driver cleanup (`stepone.ps1`)**
+Runs automatically after the first reboot via Winlogon. Configures Windows Defender and security settings using TrustedInstaller privileges (cloud protection, Tamper Protection, Memory Integrity, VBS, LSA protection, SmartScreen, exploit mitigation, and the vulnerable driver blocklist). Disables UAC. Runs DDU to remove all GPU drivers (NVIDIA, AMD, Intel), audio drivers (SoundBlaster, Realtek), then reboots normally.
+
+**Phase 3 — Final configuration (`steptwo.ps1`)**
+Runs automatically after the second reboot via RunOnce. Configures the Windows Store, imports privacy and notification registry settings, disables memory compression and BitLocker, configures power management for all network adapters and USB/PCI/HID devices, pauses Windows Update for 365 days, blocks driver updates, restores the classic context menu, applies start menu layouts for Windows 10 and 11, removes Microsoft Edge, OneDrive, UWP apps, optional features, and legacy Windows components. Then prompts you to select your GPU vendor (NVIDIA, AMD, Intel, or Skip) to install a debloated driver. Applies the Ultimate Power Plan, installs a timer resolution service, runs disk cleanup, creates a System Restore Point named "backup", and restarts.
+
+## Companion repository
+
+For additional GPU-focused scripts including post-DDU driver configuration, see the companion **Ultimate** repository:
+
+[https://github.com/FR33THYFR33THY/Ultimate](https://github.com/FR33THYFR33THY/Ultimate)
+
+## Video guide
+
+A full walkthrough of WinSux is available on YouTube:
+
+[https://youtu.be/JJvW9e4X7k0](https://youtu.be/JJvW9e4X7k0)
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Run WinSux" icon="play" href="/quickstart">
+    Step-by-step instructions to run WinSux on your machine.
+  </Card>
+  <Card title="How it works" icon="magnifying-glass" href="/how-it-works/overview">
+    Detailed breakdown of each phase and what changes are made.
+  </Card>
+  <Card title="What gets installed" icon="box" href="/configuration/software-installed">
+    Full list of software installed and configured by WinSux.
+  </Card>
+  <Card title="FAQ" icon="circle-question" href="/troubleshooting/faq">
+    Answers to common questions and issues.
+  </Card>
+</CardGroup>

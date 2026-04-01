@@ -1,0 +1,457 @@
+---
+title: "The three phases"
+description: Detailed breakdown of every action performed across WinSux's three execution phases.
+---
+
+WinSux executes across three separate boot environments. Each phase hands off to the next automatically. The steps below document exactly what happens in each one.
+
+<Steps>
+  <Step title="Phase 1 — Initial setup (WinSux.ps1)">
+
+Phase 1 is the only script you run manually. It prepares the system, downloads everything needed for the subsequent phases, and schedules them to run automatically.
+
+**Internet check**
+
+Before doing anything, the script pings `8.8.8.8`. If there is no internet connection it exits immediately with an error.
+
+**Download temp files**
+
+All supporting files are fetched from the GitHub API:
+
+```powershell
+$files = (IRM "https://api.github.com/repos/FR33THYFR33THY/WinSux/contents/Temp").download_url
+foreach ($url in $files) {
+    IWR $url -OutFile "$env:SystemRoot\Temp\$($url.Split('/')[-1])"
+}
+```
+
+Files land in `%SystemRoot%\Temp` (typically `C:\Windows\Temp`).
+
+**7-Zip**
+
+7-Zip is installed silently with `/S` and configured via registry:
+
+- `CascadedMenu = 0` — disables the cascaded submenu in the context menu
+- `ContextMenu = 259` — sets which context menu entries are shown
+
+**Visual C++ redistributables**
+
+All VC++ runtimes from 2005 through 2022 are installed silently, both x86 and x64 variants:
+
+| Version | Switches |
+|---|---|
+| 2005 x86 / x64 | `/Q /C:"msiexec /i vcredist.msi /qn /norestart"` |
+| 2008 x86 / x64 | `/q` |
+| 2010 x86 / x64 | `/quiet /norestart` |
+| 2012 x86 / x64 | `/quiet /norestart` |
+| 2013 x86 / x64 | `/quiet /norestart` |
+| 2015–2022 x86 / x64 | `/quiet /norestart` |
+
+**DDU (Display Driver Uninstaller)**
+
+DDU is extracted from `ddu.exe` using 7-Zip. A `Settings.xml` config file is written that:
+
+- Disables update checks (`CheckUpdates = False`)
+- Disables restore point creation (`CreateRestorePoint = False`)
+- Enables removal of all GPU types: NVIDIA, AMD, Intel (including NPU, OneAPI, control panels, PhysX, GFE, broadcast)
+- Removes audio bus drivers, Vulkan, and monitor drivers
+- Sets `PreventWinUpdate = True` to stop Windows from auto-reinstalling drivers after DDU runs
+
+The config file is then marked read-only so DDU cannot overwrite it.
+
+Windows driver auto-install is additionally blocked via registry:
+
+```powershell
+reg add "HKLM\Software\Microsoft\Windows\CurrentVersion\DriverSearching" /v "SearchOrderConfig" /t REG_DWORD /d "0"
+```
+
+**Google Chrome**
+
+Chrome is installed silently:
+
+```powershell
+Start-Process -Wait "$env:SystemRoot\Temp\chrome.exe" -ArgumentList "--silent --install"
+```
+
+Post-install configuration:
+
+- **uBlock Origin Lite** is force-installed via enterprise policy (`ExtensionInstallForcelist`)
+- **Hardware acceleration** is disabled via policy (`HardwareAccelerationModeEnabled = 0`) — avoids GPU conflicts during driver work
+- **Background mode** is disabled (`BackgroundModeEnabled = 0`)
+- **High Efficiency Mode** is enabled (`HighEfficiencyModeEnabled = 1`)
+- The Chrome logon Active Setup entry is removed
+- All Chrome services and scheduled tasks are deleted
+
+**DirectX**
+
+DirectX is extracted with 7-Zip and installed silently via `DXSETUP.exe /silent`.
+
+**New NVMe driver feature flags**
+
+Three feature management override registry values are enabled to activate the modern NVMe driver:
+
+```text
+HKLM\SYSTEM\CurrentControlSet\Policies\Microsoft\FeatureManagement\Overrides
+  735209102  = 1
+  1853569164 = 1
+  156965516  = 1
+```
+
+Safe boot and safe network boot entries are also added for the new NVMe storage class GUID so the driver is available during Phase 2.
+
+**Chain to Phase 2 and Phase 3**
+
+```powershell
+# Phase 2 — runs on Safe Mode logon
+reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
+    /v "Userinit" /d "powershell.exe -nop -ep bypass -f C:\Windows\Temp\stepone.ps1"
+
+# Phase 3 — runs once on the next normal boot
+reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce"
+    /v "steptwo" /d "powershell.exe -nop -ep bypass -f C:\Windows\Temp\steptwo.ps1"
+
+# Boot into Safe Mode
+bcdedit /set {current} safeboot minimal
+```
+
+The machine restarts after a 5-second delay.
+
+  </Step>
+
+  <Step title="Phase 2 — Safe Mode (stepone.ps1)">
+
+Phase 2 runs automatically on the Safe Mode boot via the Winlogon `Userinit` hook set in Phase 1.
+
+**Restore Winlogon immediately**
+
+The very first action is restoring Winlogon to its default value to prevent any loop if the script is interrupted:
+
+```powershell
+reg add "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
+    /v "Userinit" /t REG_SZ /d "C:\WINDOWS\system32\userinit.exe,"
+```
+
+**`Run-Trusted` function**
+
+Both Phase 2 and Phase 3 define a `Run-Trusted` helper that executes commands as the `TrustedInstaller` principal by temporarily replacing the service binary path:
+
+```powershell
+function Run-Trusted([String]$command) {
+    Stop-Service -Name TrustedInstaller -Force
+    $service = Get-CimInstance -ClassName Win32_Service -Filter "Name='TrustedInstaller'"
+    $DefaultBinPath = $service.PathName
+    $bytes = [System.Text.Encoding]::Unicode.GetBytes($command)
+    $base64Command = [Convert]::ToBase64String($bytes)
+    sc.exe config TrustedInstaller binPath= "cmd.exe /c powershell.exe -encodedcommand $base64Command"
+    sc.exe start TrustedInstaller
+    sc.exe config TrustedInstaller binpath= "`"$DefaultBinPath`""
+    Stop-Service -Name TrustedInstaller -Force
+}
+```
+
+This is required because Tamper Protection, VBS, and memory integrity are owned by TrustedInstaller and cannot be modified by even a SYSTEM-level administrator process.
+
+**Windows Defender and security settings (as TrustedInstaller)**
+
+Each setting is applied twice — once via `Run-Trusted` (as TrustedInstaller) and once directly as admin — to ensure the values are written regardless of which protection layer intercepts them.
+
+Settings applied:
+
+- **Real-time monitoring** — disabled (`DisableRealtimeMonitoring`)
+- **Cloud-delivered protection** — disabled (`SpyNetReporting = 0`, `SubmitSamplesConsent = 0`)
+- **Tamper Protection** — disabled (`TamperProtection = 4`)
+- **Controlled Folder Access** — disabled
+- **Firewall notifications** — disabled across Domain, Public, and Standard profiles
+- **Smart App Control** — disabled (`VerifiedAndReputableTrustModeEnabled = 0`, `SmartLockerMode = 0`)
+- **SmartScreen (Explorer)** — disabled
+- **SmartScreen (Edge)** — disabled
+- **Phishing protection** — disabled (`WTDS\Components` service disabled)
+- **PUA protection** — disabled
+- **Exploit protection kernel mitigations** — set to permissive binary value
+- **Memory integrity (HVCI)** — disabled (`HypervisorEnforcedCodeIntegrity\Enabled = 0`)
+- **Virtualization-Based Security (VBS)** — disabled by removing BCD values (`allowedinmemorysettings`, `isolatedcontext`, `hypervisorlaunchtype`) and deleting `EnableVirtualizationBasedSecurity`
+- **LSA protection** — disabled (`RunAsPPL = 0`)
+- **Vulnerable driver blocklist** — disabled (`VulnerableDriverBlocklistEnable = 0`)
+
+<Note>
+VBS is explicitly noted in the source as something FaceIt Anti-Cheat forces back on even after uninstall. The bcdedit deletions are specifically intended to counter this.
+</Note>
+
+**UAC**
+
+UAC is disabled by setting `EnableLUA = 0` in the System policies key. This is applied as a regular admin call, not via TrustedInstaller, because UAC policy is not Tamper Protection-protected.
+
+**Remove Safe Mode boot entry**
+
+```powershell
+bcdedit /deletevalue {current} safeboot
+```
+
+This ensures the next reboot goes to a normal Windows session, picking up the `RunOnce` entry that runs Phase 3.
+
+**DDU**
+
+DDU is launched with arguments to strip all GPU, audio, and realtek drivers, then restart:
+
+```powershell
+Start-Process "$env:SystemRoot\Temp\ddu\Display Driver Uninstaller.exe" `
+    -ArgumentList "-CleanSoundBlaster -CleanRealtek -CleanAllGpus -Restart" -Wait
+```
+
+DDU handles the reboot itself. When Windows next starts in normal mode, `RunOnce` fires Phase 3.
+
+  </Step>
+
+  <Step title="Phase 3 — Final configuration (steptwo.ps1)">
+
+Phase 3 runs automatically on the first normal boot after Phase 2, triggered by the `RunOnce` entry set in Phase 1. This is the longest phase.
+
+**Windows Store settings**
+
+The Store settings hive (`Microsoft.WindowsStore` `settings.dat`) is loaded and patched via a temporary registry import:
+
+- Video autoplay — disabled
+- App installation notifications — disabled
+- Personalized experiences — disabled
+- App auto-updates — disabled (`AutoDownload = 2`)
+
+**Privacy and capability access manager**
+
+The `camsvc` (Capability Access Manager) service is stopped and its database file (`CapabilityConsentStorage.db`) is deleted via `Run-Trusted`. This is done twice — before and after the main registry import — to ensure app permission grants are fully cleared.
+
+**CDPUserSvc (Windows Backup)**
+
+The Connected Device Platform user service is disabled at startup (`Start = 4`) to suppress the Windows Backup prompt.
+
+**Main registry import**
+
+```powershell
+Start-Process -Wait "regedit.exe" -ArgumentList "/S `"$env:SystemRoot\Temp\reg.reg`""
+```
+
+The `reg.reg` file applies the bulk of registry-level tweaks covering privacy, UI, performance, and telemetry settings.
+
+**Memory compression**
+
+```powershell
+Disable-MMAgent -MemoryCompression
+```
+
+Memory compression is disabled to reduce CPU overhead from the Memory Manager agent. On systems with sufficient RAM this avoids unnecessary compression cycles.
+
+**BitLocker**
+
+All BitLocker-protected volumes are decrypted:
+
+```powershell
+Get-BitLockerVolume | Where-Object { $_.ProtectionStatus -eq "On" } |
+    ForEach-Object { Disable-BitLocker -MountPoint $_.MountPoint }
+```
+
+**Scheduled tasks**
+
+Disabled via `schtasks /Change /Disable`:
+
+- `ExploitGuard MDM policy Refresh`
+- `Windows Defender Cache Maintenance`
+- `Windows Defender Cleanup`
+- `Windows Defender Scheduled Scan`
+- `Windows Defender Verification`
+- `ScheduledDefrag`
+
+**Network adapter protocol bindings**
+
+All network adapters have the following protocol bindings disabled:
+
+| Component ID | Protocol |
+|---|---|
+| `ms_lldp` | Link Layer Discovery Protocol |
+| `ms_lltdio` | Link Layer Topology Discovery Mapper |
+| `ms_implat` | Network Monitor Driver |
+| `ms_rspndr` | Link Layer Topology Discovery Responder |
+| `ms_tcpip6` | IPv6 |
+| `ms_server` | File and Printer Sharing |
+| `ms_msclient` | Client for Microsoft Networks |
+| `ms_pacer` | QoS Packet Scheduler |
+
+**Network adapter power savings**
+
+For every adapter under `HKLM\System\ControlSet001\Control\Class\{4d36e972...}`, the following are disabled:
+
+- `PnPCapabilities = 24` (disables power management and wake)
+- Advanced EEE, EEE, GigaLite, Green Ethernet, power saving mode
+- Wake on LAN, Wake on Magic Packet, Wake on Pattern, WakeOnLink
+
+**Windows Update**
+
+Updates are paused for 365 days from the current date by writing `PauseUpdatesExpiryTime`, `PauseFeatureUpdatesEndTime`, and `PauseQualityUpdatesEndTime` to the Windows Update UX settings key.
+
+Driver updates are additionally blocked via policy:
+
+```powershell
+reg add "HKLM\Software\Policies\Microsoft\Windows\DriverSearching" /v "SearchOrderConfig" /t REG_DWORD /d 0
+reg add "HKLM\Software\Policies\Microsoft\Windows\WindowsUpdate" /v "ExcludeWUDriversInQualityUpdate" /t REG_DWORD /d 1
+```
+
+**Sign-in requirement after wake**
+
+Disabled for both AC and DC power via `powercfg`:
+
+```powershell
+powercfg /setdcvalueindex scheme_current sub_none consolelock 0
+powercfg /setacvalueindex scheme_current sub_none consolelock 0
+```
+
+**Classic right-click context menu**
+
+```powershell
+reg add "HKCU\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32" /ve /t REG_SZ /d ""
+```
+
+Several additional context menu entries are removed: "Customize this folder", "Pin to Quick Access", "Add to favorites", "Troubleshoot compatibility", "Open in Terminal", "Scan with Defender", "Give access to", "Include in library", "Share", "Restore previous versions", "Send to".
+
+**UWP app removal**
+
+All AppX packages are removed for all users except those required for system function:
+
+- `*CBS*` — breaks File Explorer
+- `*Microsoft.AV1VideoExtension*`, `*AVCEncoder*`, `*HEIF*`, `*HEVC*`, `*MPEG2*`, `*RawImage*`, `*VP9*`, `*WebMedia*`, `*Webp*` — media codec extensions
+- `*Microsoft.Paint*`, `*Microsoft.Windows.Photos*` — kept
+- `*Microsoft.SecHealthUI*` — breaks Windows Server Defender
+- `*Microsoft.Windows.ShellExperienceHost*` — breaks taskbar
+- `*Microsoft.Windows.StartMenuExperienceHost*` — breaks Start menu
+- `*Microsoft.WindowsNotepad*`, `*Microsoft.WindowsStore*` — kept
+- `*NVIDIACorp.NVIDIAControlPanel*` — kept if present
+- `*windows.immersivecontrolpanel*` — breaks Settings
+
+**Windows capabilities (optional features)**
+
+All Windows capabilities are removed except:
+
+- `*Microsoft.Windows.Ethernet*` — network drivers
+- `*Microsoft.Windows.MSPaint*` (Windows 10) — Paint
+- `*Microsoft.Windows.Notepad*` / `*Notepad.System*` — Notepad
+- `*Microsoft.Windows.Wifi*` — Wi-Fi drivers
+- `*NetFX3*` — .NET Framework 3.5
+- `*VBSCRIPT*` — required for MSI installers
+- `*WMIC*` — required by monitoring programs
+- `*Windows.Client.ShellComponents*` (Windows 10) — required by Snipping Tool
+
+**Windows optional features**
+
+All optional features are disabled except those required for system stability (NetFx3/4, Search, Windows Defender, Server Shell components, WirelessNetworking, etc.).
+
+**Legacy app removal**
+
+- **Microsoft GameInput** — uninstalled via MSI GUID
+- **OneDrive** — stopped and uninstalled via `OneDriveSetup.exe -uninstall` (multiple paths for Win10/Win11 and Office 365 variants); scheduled tasks removed
+- **Remote Desktop Connection** — uninstalled via `mstsc /Uninstall`
+- **Old Snipping Tool** (Windows 10) — uninstalled via `SnippingTool.exe /Uninstall`
+- **Update for x64-based Windows Systems** — uninstalled via MSI GUID
+- **Microsoft Update Health Tools** — uninstalled via MSI GUID; `uhssvc` service and `PLUGScheduler` task removed
+
+**Startup cleanup**
+
+All `Run`, `RunOnce`, and `RunNotification` entries under both `HKCU` and `HKLM` are deleted and recreated empty. Startup folders are cleared. Non-Microsoft scheduled tasks are removed via `Run-Trusted` against the task cache registry tree.
+
+**GPU driver installation**
+
+An interactive menu prompts for GPU vendor:
+
+- **NVIDIA** — opens `nvidia.com/en-us/drivers` in Chrome, prompts to select the downloaded `.exe`, extracts it with 7-Zip, strips bloat folders (`Display.Nview`, `FrameViewSDK`, `HDAudio`, `NvBackend`, `NvContainer`, `NvCpl`, `NvDLISR`, `NvTelemetry`, `PhysX`, `ShadowPlay`, and others), then installs with `-s -noreboot -noeula -clean`. NVIDIA Control Panel is installed via winget. Post-install: DisableDynamicPstate, HDCP disabled, PhysX set to GPU, developer settings enabled, NvInspector profile imported.
+- **AMD** — opens AMD's driver download page, extracts the installer, modifies XML and JSON config files to disable bundled software (`AMDAUEPInstaller`, `AMDLinkDriverUpdate`, `AMDUpdater`, etc.), installs with `-INSTALL -VIEW:2`. Post-install: removes AMD Crash Defender service and driver, AMD audio coprocessor, AMD streaming audio driver, AMD Install Manager; imports Adrenalin settings (vsync off, texture quality performance, tessellation off, system tray disabled).
+- **Intel** — opens Intel's driver search page, extracts the installer, runs with `--noExtras --terminateProcesses -s`, installs Intel Graphics Software control panel separately. Post-install: removes startup entries, GFX firmware update tool service, HDCP service, CTA child driver, GSC firmware interface driver; imports settings (vsync off, low latency off).
+- **Skip** — proceeds without installing any driver.
+
+<Warning>
+For NVIDIA, winget is used solely to install the NVIDIA Control Panel UWP app and is uninstalled immediately afterward.
+</Warning>
+
+**Display, sound, and refresh rate**
+
+After driver installation, the script opens three panels simultaneously and pauses for manual configuration:
+
+- `ms-settings:display`
+- NVIDIA Control Panel (if present)
+- `mmsys.cpl` (Sound)
+
+**MSI mode**
+
+Message Signaled Interrupts are enabled for every GPU detected via `Get-PnpDevice -Class Display`:
+
+```powershell
+reg add "HKLM\SYSTEM\ControlSet001\Enum\$instanceID\Device Parameters\Interrupt Management\MessageSignaledInterruptProperties"
+    /v "MSISupported" /t REG_DWORD /d "1"
+```
+
+**Power plan**
+
+The Ultimate Performance power plan (`e9a42b02-d5df-448d-aa00-03f14749eb61`) is duplicated with GUID `99999999-9999-9999-9999-999999999999` and set as active. All other power plans are then deleted.
+
+The duplicated plan is then customized:
+
+- Sleep, hibernate, and fast startup — all disabled
+- Power throttling — disabled (`PowerThrottlingOff = 1`)
+- Minimum and maximum processor state — 100%
+- CPU core parking min/max — 100% (all cores unparked)
+- PCI Express link state power management — off
+- USB selective suspend — disabled
+- USB 3 link power management — off
+- Display turn-off — 10 minutes (OLED burn-in protection)
+- Wireless adapter — maximum performance
+- All battery thresholds — 0%
+
+**Device power savings**
+
+Selective suspend, enhanced power management, and idle-in-working-state are disabled for every device under:
+
+- `HKLM\SYSTEM\ControlSet001\Enum\ACPI`
+- `HKLM\SYSTEM\ControlSet001\Enum\HID`
+- `HKLM\SYSTEM\ControlSet001\Enum\PCI`
+- `HKLM\SYSTEM\ControlSet001\Enum\USB`
+
+Wake (`WaitWakeEnabled`) is also disabled for all ACPI, HID, PCI, and USB devices.
+
+**Write cache buffer flushing**
+
+For all NVMe and SCSI devices, `CacheIsPowerProtected = 1` is set in the disk device parameters. This tells Windows the storage device has its own power-protected cache, disabling the OS-level write cache buffer flush on shutdown — which reduces I/O overhead at the cost of relying on the drive's own capacitor-backed cache.
+
+**SetTimerResolutionService**
+
+A C# source file (`settimerresolutionservice.cs`) downloaded in Phase 1 is compiled using the .NET Framework 4 C# compiler:
+
+```powershell
+Start-Process -Wait "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe" `
+    -ArgumentList "-out:C:\Windows\SetTimerResolutionService.exe C:\Windows\Temp\settimerresolutionservice.cs"
+```
+
+The compiled binary is installed as an auto-start Windows service. The service requests a 0.5 ms timer resolution on startup, giving all processes on the system access to a higher-resolution system clock tick.
+
+Global timer resolution requests are also enabled:
+
+```powershell
+reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\kernel"
+    /v "GlobalTimerResolutionRequests" /t REG_DWORD /d "1"
+```
+
+<Note>
+`GlobalTimerResolutionRequests` causes the system to honor the highest timer resolution requested by any process globally, rather than applying it only to the requesting process. This benefits games and audio applications that do not request high resolution themselves.
+</Note>
+
+**Disk cleanup**
+
+- `%USERPROFILE%\AppData\Local\Temp` — cleared
+- `%SystemRoot%\Temp` — cleared
+- `cleanmgr.exe /autoclean /d C:` — runs Windows Disk Cleanup automatically
+- Removes `C:\inetpub`, `C:\PerfLogs`, `C:\XboxGames`, `C:\Windows.old`, `C:\DumpStack.log`
+
+**System restore point**
+
+A restore point named `"backup"` is created via `Checkpoint-Computer` with type `MODIFY_SETTINGS`. The `SystemRestorePointCreationFrequency` registry value is temporarily set to `0` to bypass the 24-hour cooldown, then reverted.
+
+**Restart**
+
+The machine restarts after a 5-second delay. Setup is complete.
+
+  </Step>
+</Steps>

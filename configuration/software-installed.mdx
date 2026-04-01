@@ -1,0 +1,304 @@
+---
+title: "Software installed"
+description: Everything WinSux installs and removes from your system
+---
+
+WinSux handles software installation and removal automatically across three boots. This page documents every package installed, every app removed, and the reasoning behind what gets kept.
+
+## Installed software
+
+<CardGroup cols={2}>
+  <Card title="7-Zip" icon="file-zipper">
+    File archiver used both as an end-user tool and internally by WinSux to extract DirectX and GPU drivers.
+  </Card>
+  <Card title="Google Chrome" icon="chrome">
+    Installed with privacy and performance policies applied. uBlock Origin Lite force-installed via group policy.
+  </Card>
+  <Card title="DirectX" icon="display">
+    Full DirectX runtime extracted and installed silently. New NVMe driver feature flags enabled alongside it.
+  </Card>
+  <Card title="Visual C++ Redistributables" icon="code">
+    All x86 and x64 redistributable versions from 2005 through 2022, installed silently.
+  </Card>
+</CardGroup>
+
+### 7-Zip
+
+Installed silently using `7zip.exe /S`. After installation, WinSux applies two registry settings and cleans up the Start Menu entry.
+
+```powershell
+Start-Process -Wait "$env:SystemRoot\Temp\7zip.exe" -ArgumentList "/S"
+```
+
+<AccordionGroup>
+  <Accordion title="Registry configuration">
+
+| Key | Value | Data | Effect |
+|-----|-------|------|--------|
+| `HKCU\Software\7-Zip\Options` | `CascadedMenu` | `0` | Disables cascading context submenu — items appear inline |
+| `HKCU\Software\7-Zip\Options` | `ContextMenu` | `259` | Sets which context menu actions are shown |
+
+  </Accordion>
+  <Accordion title="Start Menu cleanup">
+
+The installer places a shortcut inside a `7-Zip` subfolder. WinSux moves it to the Programs root and removes the now-empty folder:
+
+```powershell
+Move-Item -Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\7-Zip\7-Zip File Manager.lnk" `
+          -Destination "$env:ProgramData\Microsoft\Windows\Start Menu\Programs" -Force
+Remove-Item "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\7-Zip" -Recurse -Force
+```
+
+  </Accordion>
+</AccordionGroup>
+
+### Google Chrome
+
+Installed silently with `--silent --install`. After installation, services, scheduled tasks, and the Active Setup logon activation are removed so Chrome does not run anything in the background.
+
+```powershell
+Start-Process -Wait "$env:SystemRoot\Temp\chrome.exe" -ArgumentList "--silent --install"
+```
+
+**Policies applied via registry (`HKLM\SOFTWARE\Policies\Google\Chrome`):**
+
+| Value | Data | Effect |
+|-------|------|--------|
+| `HardwareAccelerationModeEnabled` | `0` | Disables GPU hardware acceleration |
+| `BackgroundModeEnabled` | `0` | Prevents Chrome from running after the window closes |
+| `HighEfficiencyModeEnabled` | `1` | Enables memory efficiency mode for inactive tabs |
+| `ExtensionInstallForcelist` → `1` | `ddkjiahejlhfcafbddmgiahcphecmpfh` | Force-installs uBlock Origin Lite from the Chrome Web Store |
+
+**Post-install cleanup:**
+- All Active Setup entries matching `*Chrome*` removed from `HKLM:\Software\Microsoft\Active Setup\Installed Components`
+- All services with `Google` in their name stopped and deleted
+- All scheduled tasks matching `*Google*` unregistered
+
+### DirectX
+
+The DirectX installer is extracted with 7-Zip, then run silently:
+
+```powershell
+& "C:\Program Files\7-Zip\7z.exe" x "$env:SystemRoot\Temp\directx.exe" -o"$env:SystemRoot\Temp\directx" -y
+Start-Process -Wait "$env:SystemRoot\Temp\directx\DXSETUP.exe" -ArgumentList "/silent"
+```
+
+Three NVMe driver feature flags are also enabled at this stage to activate the newer inbox NVMe driver:
+
+```reg
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Policies\Microsoft\FeatureManagement\Overrides]
+"735209102"=dword:00000001
+"1853569164"=dword:00000001
+"156965516"=dword:00000001
+```
+
+Safe boot entries are added so the new driver is available when booting into Safe Mode:
+
+```reg
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\SafeBoot\Network\{75416E63-5912-4DFA-AE8F-3EFACCAFFB14}]
+@="Storage disks"
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\SafeBoot\Minimal\{75416E63-5912-4DFA-AE8F-3EFACCAFFB14}]
+@="Storage disks"
+```
+
+### Visual C++ Redistributables
+
+All redistributable versions are installed silently in sequence. Installation uses hidden windows and no-restart flags throughout.
+
+<AccordionGroup>
+  <Accordion title="All versions installed">
+
+| Version | Architectures | Install flags |
+|---------|--------------|---------------|
+| 2005 | x86, x64 | `/Q /C:"msiexec /i vcredist.msi /qn /norestart"` |
+| 2008 | x86, x64 | `/q` |
+| 2010 | x86, x64 | `/quiet /norestart` |
+| 2012 | x86, x64 | `/quiet /norestart` |
+| 2013 | x86, x64 | `/quiet /norestart` |
+| 2015–2022 | x86, x64 | `/quiet /norestart` |
+
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Removed software
+
+### Microsoft Edge
+
+Edge is uninstalled through a multi-stage process that handles all known variants:
+
+<Steps>
+  <Step title="Stop all Edge-related processes">
+    Terminates `msedge`, `msedgewebview2`, `MicrosoftEdgeUpdate`, `Copilot`, `WidgetService`, `Widgets`, and others.
+  </Step>
+  <Step title="Remove EdgeUpdate registration">
+    Deletes `EdgeUpdate` registry keys from all eight registry locations (HKCU/HKLM, 32/64-bit, policy paths).
+  </Step>
+  <Step title="Uninstall EdgeUpdate">
+    Runs `MicrosoftEdgeUpdate.exe /unregsvc` followed by `/uninstall`.
+  </Step>
+  <Step title="Uninstall Edge via uninstall string">
+    Reads `UninstallString` from `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Microsoft Edge` and runs it with `--force-uninstall`.
+  </Step>
+  <Step title="Remove Edge services and folders">
+    Stops and deletes all services matching `*Edge*`. Removes `C:\Program Files (x86)\Microsoft`.
+  </Step>
+  <Step title="Remove Edge legacy package (Windows 10)">
+    Finds `Microsoft-Windows-Internet-Browser-Package` in CBS and removes it with DISM:
+    ```powershell
+    dism /online /Remove-Package /PackageName:$EdgeLegacyPackage /quiet /norestart
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  The region is temporarily set to US (244) before uninstall and restored afterward. Some Edge uninstallers check the region.
+</Note>
+
+### Microsoft OneDrive
+
+All known OneDrive variants are uninstalled:
+
+```powershell
+# System32 variant
+cmd /c "C:\Windows\System32\OneDriveSetup.exe -uninstall"
+
+# SysWOW64 variant (Windows 10)
+cmd /c "C:\Windows\SysWOW64\OneDriveSetup.exe -uninstall"
+
+# Office 365 / per-user variants
+Get-ChildItem -Path "C:\Program Files*\Microsoft OneDrive", "$env:LOCALAPPDATA\Microsoft\OneDrive" `
+  -Filter "OneDriveSetup.exe" -Recurse |
+  ForEach-Object { Start-Process -Wait $_.FullName -ArgumentList "/uninstall /allusers" }
+```
+
+OneDrive scheduled tasks are also unregistered.
+
+### Other removed applications
+
+| Application | Removal method |
+|-------------|---------------|
+| Microsoft GameInput | `msiexec /x {GUID} /qn /norestart` |
+| Remote Desktop Connection | `mstsc /Uninstall` |
+| Old Snipping Tool (Windows 10) | `SnippingTool.exe /Uninstall` |
+| Microsoft Update Health Tools | `msiexec /x {GUID} /qn /norestart`, registry key deleted, PLUGScheduler task removed |
+
+---
+
+## Removed UWP apps
+
+All AppX packages are removed for all users with the following exceptions. Removing these packages breaks core system functionality.
+
+<AccordionGroup>
+  <Accordion title="Packages kept and why">
+
+| Package pattern | Reason kept |
+|-----------------|-------------|
+| `*CBS*` | Required by File Explorer |
+| `*Microsoft.AV1VideoExtension*` | Codec |
+| `*Microsoft.AVCEncoderVideoExtension*` | Codec |
+| `*Microsoft.HEIFImageExtension*` | Codec |
+| `*Microsoft.HEVCVideoExtension*` | Codec |
+| `*Microsoft.MPEG2VideoExtension*` | Codec |
+| `*Microsoft.RawImageExtension*` | Codec |
+| `*Microsoft.Paint*` | Paint app |
+| `*Microsoft.SecHealthUI*` | Required by Windows Defender (Server) |
+| `*Microsoft.VP9VideoExtensions*` | Codec |
+| `*Microsoft.WebMediaExtensions*` | Codec |
+| `*Microsoft.WebpImageExtension*` | Codec |
+| `*Microsoft.Windows.Photos*` | Photos app |
+| `*Microsoft.Windows.ShellExperienceHost*` | Required by taskbar (Server) |
+| `*Microsoft.Windows.StartMenuExperienceHost*` | Required by Start Menu (Server) |
+| `*Microsoft.WindowsNotepad*` | Notepad app |
+| `*Microsoft.WindowsStore*` | Windows Store |
+| `*NVIDIACorp.NVIDIAControlPanel*` | NVIDIA Control Panel |
+| `*windows.immersivecontrolpanel*` | Required by Settings app (Server) |
+
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Removed Windows capabilities
+
+All optional capabilities are removed except those required for core networking or stability.
+
+<AccordionGroup>
+  <Accordion title="Capabilities kept and why">
+
+| Capability pattern | Reason kept |
+|-------------------|-------------|
+| `*Microsoft.Windows.Ethernet*` | Wired networking |
+| `*Microsoft.Windows.MSPaint*` | Paint (Windows 10) |
+| `*Microsoft.Windows.Notepad*` | Notepad |
+| `*Microsoft.Windows.Notepad.System*` | Notepad system component |
+| `*Microsoft.Windows.Wifi*` | Wireless networking |
+| `*NetFX3*` | .NET Framework 3.5 |
+| `*VBSCRIPT*` | VBScript — removing breaks MSI installers |
+| `*WMIC*` | WMIC — required by monitoring programs |
+| `*Windows.Client.ShellComponents*` | Required by the UWP Snipping Tool (Windows 10) |
+
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Removed Windows optional features
+
+All optional features are disabled except those required for normal operation.
+
+<AccordionGroup>
+  <Accordion title="Features kept and why">
+
+| Feature pattern | Reason kept |
+|----------------|-------------|
+| `*DirectPlay*` | Legacy game compatibility |
+| `*LegacyComponents*` | Legacy component support |
+| `*NetFx3*` | .NET Framework 3.5 |
+| `*NetFx4*` | .NET Framework 4.x — required by Windows Server features |
+| `*NetFx4-AdvSrvs*` | .NET 4 advanced services |
+| `*NetFx4ServerFeatures*` | .NET 4 server features — required by Windows Server |
+| `*SearchEngine-Client-Package*` | Windows Search — removing breaks search |
+| `*Server-Shell*` | Required by Windows Server desktop |
+| `*Windows-Defender*` | Required by Windows Defender on Server |
+| `*Server-Drivers-General*` | Required by Windows Server networking |
+| `*ServerCore-Drivers-General*` | Required by Windows Server networking |
+| `*WirelessNetworking*` | Required by Windows Server NVIDIA app |
+
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Set Timer Resolution Service
+
+WinSux compiles and installs a Windows service from the included C# source file (`settimerresolutionservice.cs`) to lock the system timer to its maximum hardware resolution.
+
+**How it works:**
+
+The service calls `NtSetTimerResolution` via P/Invoke on startup, setting the timer to `MaximumResolution` (the smallest interval supported by the hardware). This reduces scheduling jitter for games and real-time workloads.
+
+```powershell
+# Compile using .NET Framework 4.x csc.exe
+Start-Process -Wait "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe" `
+  -ArgumentList "-out:C:\Windows\SetTimerResolutionService.exe C:\Windows\Temp\settimerresolutionservice.cs"
+
+# Install and start
+New-Service -Name "Set Timer Resolution Service" `
+  -BinaryPathName "C:\Windows\SetTimerResolutionService.exe"
+Set-Service -Name "Set Timer Resolution Service" -StartupType Auto
+Set-Service -Name "Set Timer Resolution Service" -Status Running
+```
+
+**Global timer resolution requests** are also enabled so that per-process timer resolution requests from applications are honoured system-wide:
+
+```reg
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Session Manager\kernel]
+"GlobalTimerResolutionRequests"=dword:00000001
+```
+
+<Tip>
+  You can verify the service is running with `Get-Service "Set Timer Resolution Service"` in PowerShell.
+</Tip>

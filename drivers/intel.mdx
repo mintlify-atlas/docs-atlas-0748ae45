@@ -1,0 +1,151 @@
+---
+title: "Intel driver installation"
+description: How WinSux downloads, debloats, and installs Intel GPU drivers
+---
+
+<Note>
+DDU (Display Driver Uninstaller) has already removed all existing GPU drivers in Safe Mode before these steps run. This ensures a completely clean driver installation.
+</Note>
+
+<CardGroup cols={2}>
+  <Card title="NVIDIA drivers" icon="microchip" href="/drivers/nvidia">
+    Installation guide for NVIDIA GPUs
+  </Card>
+  <Card title="AMD drivers" icon="microchip" href="/drivers/amd">
+    Installation guide for AMD GPUs
+  </Card>
+</CardGroup>
+
+<Steps>
+
+  <Step title="Download the driver">
+    Chrome opens to Intel's driver search page, pre-filtered for Windows 11 graphics drivers sorted by most recent.
+
+    ```powershell
+    Start-Process "C:\Program Files\Google\Chrome\Application\chrome.exe" `
+      "https://www.intel.com/content/www/us/en/search.html#sortCriteria=%40lastmodifieddt%20descending&f-operatingsystem_en=Windows%2011%20Family*&f-downloadtype=Drivers&cf-tabfilter=Downloads&cf-downloadsppth=Graphics"
+    ```
+
+    Download the latest Intel Graphics driver package (`.exe` or `.zip`).
+  </Step>
+
+  <Step title="Select the downloaded file">
+    A Windows file picker opens automatically. Select the Intel driver installer you just downloaded.
+
+    ```powershell
+    Add-Type -AssemblyName System.Windows.Forms
+    $Dialog = New-Object System.Windows.Forms.OpenFileDialog
+    $Dialog.Filter = "All Files (*.*)|*.*"
+    $Dialog.ShowDialog() | Out-Null
+    $InstallFile = $Dialog.FileName
+    ```
+  </Step>
+
+  <Step title="Extract">
+    The driver package is extracted with 7-Zip to `C:\inteldriver`.
+
+    ```powershell
+    & "C:\Program Files\7-Zip\7z.exe" x "$InstallFile" -o"C:\inteldriver" -y
+    ```
+  </Step>
+
+  <Step title="Install">
+    The driver is installed silently. Intel Graphics Software (the control panel) is also installed from a bundled installer found in the extracted package.
+
+    ```powershell
+    # Install the Intel graphics driver
+    Start-Process "cmd.exe" -ArgumentList "/c `"C:\inteldriver\Installer.exe`" -f --noExtras --terminateProcesses -s" -WindowStyle Hidden -Wait
+    ```
+
+    | Flag | Effect |
+    |---|---|
+    | `-f` | Force install |
+    | `--noExtras` | Skip optional extra components |
+    | `--terminateProcesses` | Terminate conflicting processes automatically |
+    | `-s` | Silent install |
+
+    ```powershell
+    # Install Intel Graphics Software (control panel)
+    $IntelGraphicsSoftware = Get-ChildItem "C:\inteldriver\Resources\Extras\IntelGraphicsSoftware_*.exe" |
+      Select-Object -First 1 -ExpandProperty Name
+    Start-Process "C:\inteldriver\Resources\Extras\$IntelGraphicsSoftware" -ArgumentList "/s" -Wait -NoNewWindow
+    ```
+  </Step>
+
+  <Step title="Post-install cleanup">
+    Startup entries, unnecessary services, background processes, and leftover folders are removed after installation.
+
+    ```powershell
+    # Remove Intel Graphics Software startup registry entry
+    reg delete "HKLM\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run" /v "Intel® Graphics Software" /f
+    ```
+
+    **Services deleted** (stopped then removed):
+
+    | Service | Description |
+    |---|---|
+    | `IntelGFXFWupdateTool` | Intel Graphics firmware update tool |
+    | `cplspcon` | Intel Content Protection HDCP service |
+    | `CtaChildDriver` | Intel CTA child driver |
+    | `GSCAuxDriver` | Intel Graphics System Controller auxiliary firmware interface driver |
+    | `GSCx64` | Intel Graphics System Controller firmware interface driver |
+
+    ```powershell
+    $services = "IntelGFXFWupdateTool", "cplspcon", "CtaChildDriver", "GSCAuxDriver", "GSCx64"
+    foreach ($svc in $services) {
+        sc.exe stop $svc
+        sc.exe delete $svc
+    }
+    ```
+
+    ```powershell
+    # Stop IntelGraphicsSoftware and PresentMonService processes
+    "IntelGraphicsSoftware", "PresentMonService" | ForEach-Object {
+        Stop-Process -Name $_ -Force -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Seconds 2
+
+    # Delete PresentMonService.exe
+    Remove-Item "C:\Program Files\Intel\Intel Graphics Software\PresentMonService.exe" -Force
+
+    # Move start menu shortcut out of subfolder
+    Move-Item -Path "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Intel\Intel Graphics Software\Intel® Graphics Software.lnk" `
+      -Destination "$env:ProgramData\Microsoft\Windows\Start Menu\Programs" -Force
+    Remove-Item "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\Intel" -Recurse -Force
+
+    # Remove extracted driver and Intel cache folders
+    Remove-Item "C:\Intel" -Recurse -Force
+    Remove-Item "C:\inteldriver" -Recurse -Force
+    ```
+  </Step>
+
+  <Step title="Apply graphics settings">
+    A `3DKeys` registry key is created under each GPU adapter's device class entry. Graphics settings are then written into that key.
+
+    ```powershell
+    # Create 3DKeys key for each GPU adapter
+    $basePath = "HKLM:\System\ControlSet001\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+    $adapterKeys = Get-ChildItem -Path $basePath
+    foreach ($key in $adapterKeys) {
+        if ($key.PSChildName -match '^\d{4}$') {
+            reg add "$($key.Name)\3DKeys" /f
+        }
+    }
+    ```
+
+    ```reg
+    ; Frame Synchronization (VSync) — Off
+    ; Applied to all 3DKeys subkeys under {4d36e968-e325-11ce-bfc1-08002be10318}
+    "Global_AsyncFlipMode"=dword:00000002
+
+    ; Low Latency Mode — Off
+    "Global_LowLatency"=dword:00000000
+    ```
+
+    | Setting | Value | Effect |
+    |---|---|---|
+    | `Global_AsyncFlipMode` | `2` | Frame synchronization (VSync) disabled |
+    | `Global_LowLatency` | `0` | Low latency mode off |
+  </Step>
+
+</Steps>

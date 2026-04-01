@@ -1,0 +1,118 @@
+---
+title: "FAQ"
+description: Frequently asked questions about WinSux.
+---
+
+<AccordionGroup>
+
+  <Accordion title="Is WinSux safe to run?">
+    WinSux is open source — you can review every line at [github.com/FR33THYFR33THY/WinSux](https://github.com/FR33THYFR33THY/WinSux) before running anything.
+
+    It makes significant changes to your system including disabling security features, removing UWP apps, and modifying boot configuration. It is intended for power users, gamers, and enthusiasts who want maximum performance and accept the trade-offs involved.
+
+    <Warning>
+      Always review scripts before running them from the internet. Never run a script you have not read.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="Will WinSux work on Windows 10 and Windows 11?">
+    Yes. WinSux supports Windows 10 and Windows 11 across Home, Pro, LTSC, IoT, and Server editions.
+
+    Some steps are OS-version specific — for example, Windows 10 uses `StartMenuLayout.xml` while Windows 11 uses `start2.bin` — and the script handles both cases automatically.
+  </Accordion>
+
+  <Accordion title="Do I need to be on a fresh Windows install?">
+    A fresh install is strongly recommended for best results.
+
+    Running WinSux on an existing system with pre-installed software may produce unexpected results. The script removes all UWP apps, clears startup entries, and removes all third-party scheduled tasks. Software already installed on your system may break or lose configuration as a result.
+  </Accordion>
+
+  <Accordion title="What happens to my files and documents?">
+    WinSux does not touch your personal files in `Documents`, `Downloads`, `Desktop`, or similar user folders. It only modifies system software, registry settings, and system apps.
+  </Accordion>
+
+  <Accordion title="My antivirus flagged WinSux. Is it a virus?">
+    WinSux is not malware. However, it uses techniques that security software commonly flags:
+
+    - It hijacks the `TrustedInstaller` service to run commands as SYSTEM
+    - It disables Windows Defender settings and Tamper Protection
+    - It uses `bcdedit` to modify boot configuration
+    - It downloads and executes remote code via `iwr | iex`
+
+    These are all intentional, documented behaviors. Review the source code yourself to confirm: [github.com/FR33THYFR33THY/WinSux](https://github.com/FR33THYFR33THY/WinSux).
+
+    <Tip>
+      Disable your antivirus or add an exclusion for the WinSux script directory before running, otherwise the AV may quarantine downloaded temp files mid-run.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="Can I run it multiple times?">
+    Running WinSux multiple times is generally safe. Most operations are idempotent — they produce the same result regardless of how many times they are run.
+
+    Be aware that it will reinstall software (7-Zip, Chrome, Visual C++ runtimes, DirectX) and restart your computer again each time.
+  </Accordion>
+
+  <Accordion title="What's the difference between WinSux and the Ultimate repo?">
+    WinSux handles the base Windows setup: software installation, bloat removal, Defender settings, OS configuration, and driver installation.
+
+    The [Ultimate repo](https://github.com/FR33THYFR33THY/Ultimate) focuses on GPU-specific optimization, including DDU and low-level graphics driver tweaks.
+
+    For a full optimization, use both — WinSux first, then Ultimate.
+  </Accordion>
+
+  <Accordion title="Why does WinSux disable UAC?">
+    UAC (`EnableLUA=0`) is disabled because it generates prompts and adds process overhead. On a single-user system where you are already running as administrator, UAC provides limited security benefit. Disabling it eliminates prompt interruptions during normal use.
+  </Accordion>
+
+  <Accordion title="Why are network adapter protocols like IPv6 disabled?">
+    WinSux disables the following adapter bindings, keeping only IPv4 (`ms_tcpip`):
+
+    | Component | Description |
+    |-----------|-------------|
+    | `ms_lldp` | Link Layer Discovery Protocol |
+    | `ms_lltdio` | Link Layer Topology Discovery Mapper |
+    | `ms_implat` | Network Setup Service |
+    | `ms_rspndr` | Link Layer Topology Discovery Responder |
+    | `ms_tcpip6` | IPv6 |
+    | `ms_server` | File and Printer Sharing |
+    | `ms_msclient` | Client for Microsoft Networks |
+    | `ms_pacer` | QoS Packet Scheduler |
+
+    These protocols are unused by most home and gaming setups. Disabling them reduces network stack overhead. IPv6 is disabled because most gaming and home internet traffic uses IPv4.
+  </Accordion>
+
+  <Accordion title="Why is memory compression disabled?">
+    Memory compression (`Disable-MMAgent -MemoryCompression`) trades CPU cycles for reduced physical memory usage. On systems with sufficient RAM, disabling compression reduces CPU load and removes the latency introduced by compression and decompression operations — which matters for consistent frame times in games.
+  </Accordion>
+
+  <Accordion title="Why is BitLocker disabled?">
+    BitLocker adds encryption overhead to every disk read and write. Disabling it removes that overhead for maximum storage performance. On a single-user gaming or workstation build, the security benefit of full-disk encryption is generally outweighed by the performance cost.
+  </Accordion>
+
+  <Accordion title="What is the SetTimerResolutionService?">
+    Windows uses a global timer resolution (default ~15.6 ms) that controls how often the CPU scheduler runs. The `SetTimerResolutionService` (compiled from `settimerresolutionservice.cs`) calls `NtSetTimerResolution` to request the maximum available resolution — typically ~0.5 ms on most hardware.
+
+    A higher timer resolution reduces input latency and frame time variance in games by allowing the scheduler to wake processes more frequently and precisely.
+  </Accordion>
+
+  <Accordion title="Why does the script open Chrome to download GPU drivers instead of downloading automatically?">
+    GPU driver versions are updated frequently. Hardcoding a download URL would quickly become outdated. Instead, WinSux opens the official vendor download page (NVIDIA, AMD, or Intel) so you always get the latest version. Once you download the installer, WinSux handles extraction, debloating, and silent installation for you.
+  </Accordion>
+
+  <Accordion title="How do I undo WinSux changes?">
+    WinSux creates a system restore point named `backup` at the end of Phase 3. To restore:
+
+    1. Open **System Properties → System Protection**
+    2. Click **System Restore**
+    3. Select the `backup` restore point and follow the wizard
+
+    <Note>
+      System restore does not cover all changes. Uninstalled applications (Edge, OneDrive, UWP apps) are not restored by a system restore point. For a complete reversal, a fresh Windows install is the most reliable option.
+    </Note>
+  </Accordion>
+
+  <Accordion title="Is there a video guide?">
+    Yes — see the [official video guide](https://youtu.be/JJvW9e4X7k0) by FR33THYFR33THY for a full walkthrough of the WinSux process.
+  </Accordion>
+
+</AccordionGroup>

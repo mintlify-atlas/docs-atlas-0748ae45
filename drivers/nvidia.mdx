@@ -1,0 +1,241 @@
+---
+title: "NVIDIA driver installation"
+description: How WinSux downloads, debloats, and installs NVIDIA GPU drivers
+---
+
+<Note>
+DDU (Display Driver Uninstaller) has already removed all existing GPU drivers in Safe Mode before these steps run. This ensures a completely clean driver installation.
+</Note>
+
+<CardGroup cols={2}>
+  <Card title="AMD drivers" icon="microchip" href="/drivers/amd">
+    Installation guide for AMD GPUs
+  </Card>
+  <Card title="Intel drivers" icon="microchip" href="/drivers/intel">
+    Installation guide for Intel GPUs
+  </Card>
+</CardGroup>
+
+<Steps>
+
+  <Step title="Download the driver">
+    Chrome opens to the NVIDIA driver download page. Download the latest Game Ready or Studio driver installer (`.exe`).
+
+    ```powershell
+    Start-Process "C:\Program Files\Google\Chrome\Application\chrome.exe" "https://www.nvidia.com/en-us/drivers"
+    ```
+  </Step>
+
+  <Step title="Select the downloaded file">
+    A Windows file picker opens automatically. Select the `.exe` driver installer you just downloaded.
+
+    ```powershell
+    Add-Type -AssemblyName System.Windows.Forms
+    $Dialog = New-Object System.Windows.Forms.OpenFileDialog
+    $Dialog.Filter = "All Files (*.*)|*.*"
+    $Dialog.ShowDialog() | Out-Null
+    $InstallFile = $Dialog.FileName
+    ```
+  </Step>
+
+  <Step title="Extract and debloat">
+    The installer is extracted with 7-Zip to `%SystemRoot%\Temp\nvidiadriver`. The following components are removed before installation to strip telemetry, overlays, and unnecessary bundled software:
+
+    ```powershell
+    & "C:\Program Files\7-Zip\7z.exe" x "$InstallFile" -o"$env:SystemRoot\Temp\nvidiadriver" -y
+    ```
+
+    | Component | Description |
+    |---|---|
+    | `Display.Nview` | nView desktop manager |
+    | `FrameViewSDK` | Frame rate measurement SDK |
+    | `HDAudio` | NVIDIA HD Audio driver |
+    | `MSVCRT` | Bundled C++ runtimes (already installed by Windows) |
+    | `NvApp\CEF` | Chromium Embedded Framework (NVIDIA overlay) |
+    | `NvApp\osc` | In-game overlay |
+    | `NvApp\Plugins` | App plugins |
+    | `NvApp\UpgradeConsent` | Upgrade consent dialog |
+    | `NvApp\www` | Bundled web assets |
+    | `NvApp.MessageBus` | Inter-process messaging for NVIDIA app |
+    | `NvBackend` | NVIDIA backend services |
+    | `NvContainer` | Container service |
+    | `NvCpl` | NVIDIA Control Panel (classic) |
+    | `NvDLISR` | NVIDIA DLSS |
+    | `NVPCF` | Platform controller framework |
+    | `NvTelemetry` | Telemetry |
+    | `NvVAD` | Virtual audio device |
+    | `PhysX` | PhysX runtime |
+    | `PPC` | Power policy controller |
+    | `ShadowPlay` | Recording and streaming overlay |
+    | `NvApp\7z.dll` / `NvApp\7z.exe` | Bundled 7-Zip binaries |
+    | `NvApp\DarkModeCheck.exe` | Dark mode detection utility |
+    | `NvApp\InstallerExtension.dll` | Installer extension |
+    | `NvApp\NvApp.nvi` | NVIDIA app NVI config |
+    | `NvApp\NvAppApi.dll` | NVIDIA app API library |
+    | `NvApp\NvAppExt.dll` | NVIDIA app extension |
+    | `NvApp\NvConfigGenerator.dll` | Config generator |
+  </Step>
+
+  <Step title="Install">
+    The driver is installed silently with no reboot, no EULA prompt, and a clean install flag that removes any remnants of a previous driver.
+
+    ```powershell
+    Start-Process "$env:SystemRoot\Temp\nvidiadriver\setup.exe" -ArgumentList "-s -noreboot -noeula -clean" -Wait -NoNewWindow
+    ```
+
+    | Flag | Effect |
+    |---|---|
+    | `-s` | Silent install |
+    | `-noreboot` | Suppress automatic reboot |
+    | `-noeula` | Skip EULA prompt |
+    | `-clean` | Clean install — removes old driver components |
+  </Step>
+
+  <Step title="Install NVIDIA Control Panel">
+    The NVIDIA Control Panel is installed from the Microsoft Store via winget using its Store product ID. Winget is removed after use.
+
+    ```powershell
+    Start-Process "winget" -ArgumentList "install `"9NF8H0H7WMLT`" --silent --accept-package-agreements --accept-source-agreements --disable-interactivity --no-upgrade" -Wait -WindowStyle Hidden
+
+    # Remove winget after use
+    Get-AppxPackage -allusers *Microsoft.Winget.Source* | Remove-AppxPackage
+    ```
+
+    <Tip>
+      `9NF8H0H7WMLT` is the Microsoft Store product ID for the NVIDIA Control Panel UWP app.
+    </Tip>
+  </Step>
+
+  <Step title="Post-install cleanup">
+    The original installer file and NVIDIA driver cache folder are removed.
+
+    ```powershell
+    # Remove driver cache folder
+    Remove-Item "C:\NVIDIA" -Recurse -Force -ErrorAction SilentlyContinue
+
+    # Remove original installer
+    Remove-Item "$InstallFile" -Force -ErrorAction SilentlyContinue
+    ```
+  </Step>
+
+  <Step title="Apply settings via registry">
+    Performance and privacy settings are written directly to the GPU device registry keys under `HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}`.
+
+    ```reg
+    ; Disable Dynamic Pstate — prevents GPU power state switching for consistent performance
+    [HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\<adapter>]
+    "DisableDynamicPstate"=dword:00000001
+
+    ; Disable HDCP — removes content protection overhead
+    "RMHdcpKeyglobZero"=dword:00000001
+
+    ; Allow GPU profiling counters to all users
+    "RmProfilingAdminOnly"=dword:00000000
+    ```
+
+    ```reg
+    ; PhysX set to GPU
+    [HKLM\System\ControlSet001\Services\nvlddmkm\Parameters\Global\NVTweak]
+    "NvCplPhysxAuto"=dword:00000000
+
+    ; Developer settings visible in NVIDIA Control Panel
+    "NvDevToolsVisible"=dword:00000001
+
+    ; GPU profiling counters accessible globally
+    "RmProfilingAdminOnly"=dword:00000000
+    ```
+
+    ```reg
+    ; Disable system tray icon
+    [HKCU\Software\NVIDIA Corporation\NvTray]
+    "StartOnLogin"=dword:00000000
+    ```
+
+    ```reg
+    ; Enable Legacy Image Sharpening (written to three locations)
+    [HKLM\SYSTEM\CurrentControlSet\Services\nvlddmkm\FTS]
+    "EnableGR535"=dword:00000000
+
+    [HKLM\SYSTEM\ControlSet001\Services\nvlddmkm\Parameters\FTS]
+    "EnableGR535"=dword:00000000
+
+    [HKLM\SYSTEM\CurrentControlSet\Services\nvlddmkm\Parameters\FTS]
+    "EnableGR535"=dword:00000000
+    ```
+
+    | Setting | Value | Effect |
+    |---|---|---|
+    | `DisableDynamicPstate` | `1` | Locks GPU performance state, prevents clock throttling |
+    | `RMHdcpKeyglobZero` | `1` | Disables HDCP content protection overhead |
+    | `NvCplPhysxAuto` | `0` | Sets PhysX processing to GPU |
+    | `NvDevToolsVisible` | `1` | Shows developer settings in NVIDIA Control Panel |
+    | `RmProfilingAdminOnly` | `0` | Allows GPU performance counters without admin rights |
+    | `StartOnLogin` | `0` | Disables NVIDIA system tray icon at startup |
+    | `EnableGR535` | `0` | Enables legacy Image Sharpening feature |
+
+    Additionally, NVIDIA Driver Settings (DRS) files are unblocked at `C:\ProgramData\NVIDIA Corporation\Drs` to ensure NVIDIA Inspector profile changes can be applied:
+
+    ```powershell
+    Get-ChildItem -Path "C:\ProgramData\NVIDIA Corporation\Drs" -Recurse | Unblock-File
+    ```
+  </Step>
+
+  <Step title="Import NVIDIA Inspector profile">
+    A `.nip` profile file is written to `%SystemRoot%\Temp` and imported into NVIDIA Inspector silently. Settings are applied globally to the **Base Profile**.
+
+    ```powershell
+    Start-Process -Wait "$env:SystemRoot\Temp\inspector.exe" -ArgumentList "-silentImport -silent $env:SystemRoot\Temp\inspector.nip"
+    ```
+
+    <AccordionGroup>
+      <Accordion title="Latency and sync settings">
+
+        | Setting | Value | Description |
+        |---|---|---|
+        | Maximum Pre-Rendered Frames | `1` | Reduces render queue depth for lower input latency |
+        | Ultra Low Latency - CPL State | `2` | Enables CPL latency control |
+        | Ultra Low Latency - Enabled | `1` | Activates Ultra Low Latency mode |
+        | Vertical Sync | `138504007` | VSync off |
+        | Vertical Sync - Tear Control | `2525368439` | Adaptive tear control |
+        | Preferred Refresh Rate | `1` | Always use highest available refresh rate |
+        | GSYNC - Application Mode | `0` | G-Sync disabled for applications |
+        | GSYNC - Application State | `4` | Application G-Sync state |
+        | GSYNC - Global Feature | `0` | G-Sync globally disabled |
+        | GSYNC - Global Mode | `0` | G-Sync mode off |
+        | GSYNC - Indicator Overlay | `0` | G-Sync indicator overlay off |
+        | Frame Rate Limiter V3 | `0` | Frame rate limiter disabled |
+        | Vulkan/OpenGL Present Method | `0` | Default present method |
+
+      </Accordion>
+      <Accordion title="Texture and antialiasing settings">
+
+        | Setting | Value | Description |
+        |---|---|---|
+        | Antialiasing - Gamma Correction | `0` | AA gamma correction off |
+        | Antialiasing - Mode | `1` | Application-controlled antialiasing |
+        | Antialiasing - Setting | `0` | No forced AA |
+        | Anisotropic Filter - Optimization | `1` | AF optimization enabled |
+        | Anisotropic Filter - Sample Optimization | `1` | AF sample optimization enabled |
+        | Anisotropic Filtering - Mode | `1` | AF mode on |
+        | Anisotropic Filtering - Setting | `1` | AF setting level |
+        | Texture Filtering - Negative LOD Bias | `0` | Clamp negative LOD bias |
+        | Texture Filtering - Quality | `20` | High performance texture filtering |
+        | Texture Filtering - Trilinear Optimization | `0` | Trilinear optimization off |
+
+      </Accordion>
+      <Accordion title="Performance and compute settings">
+
+        | Setting | Value | Description |
+        |---|---|---|
+        | Power Management - Mode | `1` | Prefer Maximum Performance |
+        | CUDA - Force P2 State | `0` | CUDA P2 state forcing disabled |
+        | CUDA - Sysmem Fallback Policy | `1` | CUDA system memory fallback policy |
+        | Shader Cache - Cache Size | `4294967295` | Unlimited shader cache |
+        | Threaded Optimization | `1` | Threaded optimization enabled |
+        | OpenGL GDI Compatibility | `0` | OpenGL GDI compatibility off |
+
+      </Accordion>
+    </AccordionGroup>
+  </Step>
+
+</Steps>

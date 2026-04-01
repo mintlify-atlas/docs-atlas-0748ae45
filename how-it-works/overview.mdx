@@ -1,0 +1,85 @@
+---
+title: "How WinSux works"
+description: Overview of WinSux's architecture and execution model across three phases and three reboots.
+---
+
+WinSux is a three-phase optimization suite that spans three reboots. Each phase runs automatically, chained together via Windows boot mechanisms, so you only need to trigger the first script manually.
+
+## Architecture
+
+```text
+WinSux.ps1 (Phase 1)
+  │
+  ├─ Downloads: 7zip, chrome, ddu, directx, vcredist (2005-2022)
+  ├─ Installs: 7-Zip, C++ runtimes, Chrome, DDU config
+  ├─ Sets Winlogon → stepone.ps1
+  ├─ Sets RunOnce → steptwo.ps1
+  └─ bcdedit /set safeboot minimal → RESTART
+       │
+       ▼
+stepone.ps1 (Phase 2 — Safe Mode)
+  │
+  ├─ Runs as TrustedInstaller: Defender, VBS, Tamper Protection
+  ├─ Disables UAC
+  ├─ Restores Winlogon to userinit.exe
+  └─ DDU -CleanAllGpus -CleanSoundBlaster -CleanRealtek -Restart → RESTART
+       │
+       ▼
+steptwo.ps1 (Phase 3 — Normal Boot)
+  │
+  ├─ Windows Store, privacy, app permissions
+  ├─ Removes Edge, OneDrive, UWP apps, legacy features
+  ├─ Network adapter power savings disabled
+  ├─ GPU driver install (NVIDIA/AMD/Intel/Skip)
+  ├─ Power plan: Ultimate Performance
+  ├─ Timer Resolution Service installed
+  └─ Disk cleanup → Restore point → RESTART
+```
+
+## Why three phases?
+
+Two constraints force the work to be split across separate boot environments.
+
+### Safe Mode is required for DDU
+
+Display Driver Uninstaller (DDU) must run in Safe Mode to fully remove GPU drivers. In a normal boot, the kernel has already loaded the graphics driver, locking its files and preventing complete removal. Safe Mode loads only the minimum set of drivers, leaving GPU driver files accessible and unlocked. Running DDU outside Safe Mode risks leaving behind driver residue that can cause conflicts with the freshly installed driver.
+
+### TrustedInstaller is required for security settings
+
+Several Windows security features — Tamper Protection, Virtualization-Based Security (VBS), memory integrity (HVCI), and Smart App Control — cannot be disabled by a standard administrator process. They are owned by the `TrustedInstaller` / `NT SERVICE\TrustedInstaller` principal, which sits above even `SYSTEM` for certain registry keys.
+
+WinSux works around this using the `Run-Trusted` function, present in both `stepone.ps1` and `steptwo.ps1`. The function temporarily replaces the `TrustedInstaller` service binary path with a `cmd.exe` call that executes an encoded PowerShell command, starts the service (causing that command to run as TrustedInstaller), then restores the original binary path and stops the service again.
+
+```powershell
+function Run-Trusted([String]$command) {
+    Stop-Service -Name TrustedInstaller -Force
+    $bytes = [System.Text.Encoding]::Unicode.GetBytes($command)
+    $base64Command = [Convert]::ToBase64String($bytes)
+    sc.exe config TrustedInstaller binPath= "cmd.exe /c powershell.exe -encodedcommand $base64Command"
+    sc.exe start TrustedInstaller
+    sc.exe config TrustedInstaller binpath= "`"$DefaultBinPath`""
+    Stop-Service -Name TrustedInstaller -Force
+}
+```
+
+<Warning>
+This technique temporarily hijacks a Windows system service. The service binary path is restored immediately after the command runs, but the window during execution has no error recovery — if the machine loses power at that moment, the TrustedInstaller service will be left pointing at a non-existent command.
+</Warning>
+
+## Execution chain
+
+The three scripts are connected using two standard Windows persistence mechanisms:
+
+- **Winlogon `Userinit`** — Phase 1 writes `stepone.ps1` into the `Userinit` registry value. Windows calls Userinit during logon to start the shell; replacing it with a PowerShell script causes that script to run immediately on the next logon (which happens to be the Safe Mode boot).
+- **`RunOnce`** — Phase 1 also writes `steptwo.ps1` into `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce`. This key runs its entries exactly once on the next normal boot, then deletes them automatically.
+
+Phase 2 (`stepone.ps1`) restores Winlogon to `userinit.exe` as its very first action, before doing anything else, so that if Safe Mode is exited or the machine reboots mid-script, the system still logs in normally rather than looping back into the script.
+
+<CardGroup cols={2}>
+  <Card title="The three phases" icon="list-ordered" href="/how-it-works/three-steps">
+    Detailed breakdown of every action performed in each phase.
+  </Card>
+  <Card title="Configuration" icon="sliders" href="/configuration/software-installed">
+    Learn what WinSux installs and configures on your system.
+  </Card>
+</CardGroup>

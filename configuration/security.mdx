@@ -1,0 +1,301 @@
+---
+title: "Security settings"
+description: How WinSux configures Windows Defender and security features
+---
+
+<Warning>
+  WinSux significantly reduces Windows security protections. The settings on this page are optimized for performance and low latency but leave your system substantially more exposed to malware, ransomware, and unauthorized access. Only proceed if you understand and accept these trade-offs.
+</Warning>
+
+Most security settings require elevated privileges beyond standard Administrator. WinSux handles this by running commands as `NT SERVICE\TrustedInstaller` and by rebooting into Safe Mode before applying Defender settings.
+
+## How TrustedInstaller execution works
+
+WinSux uses a `Run-Trusted` function that temporarily hijacks the TrustedInstaller service to execute commands at the TrustedInstaller privilege level. TrustedInstaller has ownership over protected system registry keys and files that even SYSTEM cannot modify directly.
+
+```powershell
+function Run-Trusted([String]$command) {
+    Stop-Service -Name TrustedInstaller -Force -ErrorAction Stop
+
+    $service        = Get-CimInstance -ClassName Win32_Service -Filter "Name='TrustedInstaller'"
+    $DefaultBinPath = $service.PathName
+
+    $bytes         = [System.Text.Encoding]::Unicode.GetBytes($command)
+    $base64Command = [Convert]::ToBase64String($bytes)
+
+    sc.exe config TrustedInstaller binPath= "cmd.exe /c powershell.exe -encodedcommand $base64Command"
+    sc.exe start  TrustedInstaller
+    sc.exe config TrustedInstaller binpath= "`"$DefaultBinPath`""
+
+    Stop-Service -Name TrustedInstaller -Force
+}
+```
+
+The service binary path is restored immediately after execution. Each Defender registry change in `stepone.ps1` is run twice: once via `Run-Trusted` and once as a standard Administrator, to maximise the chance of the write succeeding regardless of current tamper protection state.
+
+## Safe Mode execution
+
+Defender settings that Windows actively re-enables at runtime must be written while Defender is not running. WinSux sets up `stepone.ps1` to run via `Winlogon\Userinit` on the next boot, then forces a Safe Mode boot:
+
+```powershell
+# Register stepone.ps1 to run at next logon (via Winlogon Userinit)
+reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" `
+  /v "Userinit" /t REG_SZ `
+  /d "powershell.exe -nop -ep bypass -WindowStyle Maximized -f C:\Windows\Temp\stepone.ps1"
+
+# Boot into Safe Mode
+bcdedit /set {current} safeboot minimal
+```
+
+`stepone.ps1` restores the `Userinit` key and removes the Safe Mode flag after it completes, then restarts into normal mode.
+
+---
+
+## Windows Defender
+
+All Defender settings below are applied via both TrustedInstaller and Administrator execution.
+
+### Virus and threat protection
+
+<AccordionGroup>
+  <Accordion title="Real-Time Protection">
+
+```reg
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows Defender\Real-Time Protection]
+"DisableRealtimeMonitoring"=dword:00000000
+```
+
+<Note>
+  The value is intentionally set to `0` (not `1`). Windows enforces this key and resets it, so WinSux triggers the write to assert TrustedInstaller ownership. The Safe Mode execution prevents the runtime enforcement from firing during the write.
+</Note>
+
+  </Accordion>
+  <Accordion title="Dev Drive Protection">
+
+```reg
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows Defender\Real-Time Protection]
+"DisableAsyncScanOnOpen"=dword:00000001
+```
+
+Disables the asynchronous scan that runs when files on a Dev Drive are opened.
+
+  </Accordion>
+  <Accordion title="Cloud-Delivered Protection">
+
+```reg
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows Defender\Spynet]
+"SpyNetReporting"=dword:00000000
+```
+
+Stops Defender from sending threat telemetry to Microsoft's cloud.
+
+  </Accordion>
+  <Accordion title="Automatic Sample Submission">
+
+```reg
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows Defender\Spynet]
+"SubmitSamplesConsent"=dword:00000000
+```
+
+Prevents Defender from automatically uploading suspicious files to Microsoft.
+
+  </Accordion>
+  <Accordion title="Tamper Protection">
+
+```reg
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows Defender\Features]
+"TamperProtection"=dword:00000004
+```
+
+Value `4` disables Tamper Protection. This must be written via TrustedInstaller in Safe Mode; the setting is otherwise protected at the kernel level.
+
+  </Accordion>
+</AccordionGroup>
+
+### Ransomware protection
+
+```reg
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows Defender\Windows Defender Exploit Guard\Controlled Folder Access]
+"EnableControlledFolderAccess"=dword:00000000
+```
+
+Disables Controlled Folder Access (ransomware protection). Controlled Folder Access blocks unauthorized writes to protected folders such as Documents and Desktop.
+
+### Firewall notifications
+
+Notifications are disabled across all three firewall profiles:
+
+```reg
+[HKEY_LOCAL_MACHINE\System\ControlSet001\Services\SharedAccess\Parameters\FirewallPolicy\DomainProfile]
+"DisableNotifications"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\System\ControlSet001\Services\SharedAccess\Parameters\FirewallPolicy\PublicProfile]
+"DisableNotifications"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\System\ControlSet001\Services\SharedAccess\Parameters\FirewallPolicy\StandardProfile]
+"DisableNotifications"=dword:00000001
+```
+
+Security Center notification keys are also cleared:
+
+```reg
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows Defender Security Center\Notifications]
+"DisableEnhancedNotifications"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows Defender Security Center\Virus and threat protection]
+"NoActionNotificationDisabled"=dword:00000001
+"SummaryNotificationDisabled"=dword:00000001
+"FilesBlockedNotificationDisabled"=dword:00000001
+```
+
+Account protection notifications are also disabled per user:
+
+```reg
+[HKEY_CURRENT_USER\SOFTWARE\Microsoft\Windows Defender Security Center\Account protection]
+"DisableNotifications"=dword:00000001
+"DisableDynamiclockNotifications"=dword:00000001
+"DisableWindowsHelloNotifications"=dword:00000001
+```
+
+---
+
+## App and browser control
+
+### Smart App Control
+
+Smart App Control is disabled via three keys:
+
+```reg
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows Defender]
+"VerifiedAndReputableTrustModeEnabled"=dword:00000000
+"SmartLockerMode"=dword:00000000
+
+[HKEY_LOCAL_MACHINE\System\ControlSet001\Control\CI\Policy]
+"VerifiedAndReputablePolicyState"=dword:00000000
+```
+
+The SmartLocker AppID configuration is also cleared:
+
+```reg
+[HKEY_LOCAL_MACHINE\System\ControlSet001\Control\AppID\Configuration\SMARTLOCKER]
+"START_PENDING"=dword:00000000
+"ENABLED"=hex:00,00,00,00,00,00,00,00
+```
+
+### PUA Protection
+
+```reg
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows Defender]
+"PUAProtection"=dword:00000000
+```
+
+Disables blocking of Potentially Unwanted Applications.
+
+### SmartScreen (Explorer)
+
+```reg
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer]
+"SmartScreenEnabled"="Off"
+```
+
+### SmartScreen (Microsoft Edge)
+
+```reg
+[HKEY_CURRENT_USER\SOFTWARE\Microsoft\Edge\SmartScreenEnabled]
+@=dword:00000000
+
+[HKEY_CURRENT_USER\SOFTWARE\Microsoft\Edge\SmartScreenPuaEnabled]
+@=dword:00000000
+```
+
+Applied during normal boot (Edge SmartScreen is a per-user setting).
+
+### SmartScreen (Store apps)
+
+```reg
+[HKEY_CURRENT_USER\SOFTWARE\Microsoft\Windows\CurrentVersion\AppHost]
+"EnableWebContentEvaluation"=dword:00000000
+```
+
+### Phishing protection
+
+All Enhanced Phishing Protection components are disabled:
+
+```reg
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\WTDS\Components]
+"CaptureThreatWindow"=dword:00000000
+"NotifyMalicious"=dword:00000000
+"NotifyPasswordReuse"=dword:00000000
+"NotifyUnsafeApp"=dword:00000000
+"ServiceEnabled"=dword:00000000
+```
+
+### Exploit Protection kernel mitigations
+
+Kernel mitigation options are set to their minimum configuration:
+
+```reg
+[HKEY_LOCAL_MACHINE\System\ControlSet001\Control\Session Manager\kernel]
+"MitigationOptions"=hex:22,22,22,00,00,02,00,00,00,02,00,00,00,00,00,00,00,00,00,00,00,00,00,00
+```
+
+---
+
+## Virtualization-Based Security (VBS)
+
+Memory Integrity (HVCI) is disabled:
+
+```reg
+[HKEY_LOCAL_MACHINE\System\ControlSet001\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity]
+"Enabled"=dword:00000000
+; "ChangedInBootCycle" and "WasEnabledBy" are deleted
+```
+
+VBS boot loader settings are removed via bcdedit:
+
+```powershell
+bcdedit /deletevalue allowedinmemorysettings
+bcdedit /deletevalue isolatedcontext
+bcdedit /deletevalue hypervisorlaunchtype
+```
+
+The top-level VBS enable key is deleted entirely:
+
+```powershell
+reg delete "HKLM\SYSTEM\CurrentControlSet\Control\DeviceGuard" /v "EnableVirtualizationBasedSecurity" /f
+```
+
+<Note>
+  VBS may be re-enabled by software such as anti-cheat systems (e.g. FACEIT). WinSux includes a comment noting this. You may need to re-run the relevant portion of `stepone.ps1` after uninstalling such software.
+</Note>
+
+---
+
+## Other security settings
+
+### UAC (User Account Control)
+
+```reg
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System]
+"EnableLUA"=dword:00000000
+```
+
+UAC is disabled entirely. Elevation prompts no longer appear.
+
+### LSA Protection
+
+```reg
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Lsa]
+"RunAsPPL"=dword:00000000
+```
+
+Disables Protected Process Light for the Local Security Authority. LSA protection prevents credential theft tools from reading LSASS memory.
+
+### Vulnerable Driver Blocklist
+
+```reg
+[HKEY_LOCAL_MACHINE\System\ControlSet001\Control\CI\Config]
+"VulnerableDriverBlocklistEnable"=dword:00000000
+```
+
+Disables the Microsoft Vulnerable Driver Blocklist. This allows loading of drivers that Microsoft has flagged as known attack vectors.

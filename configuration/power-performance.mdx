@@ -1,0 +1,274 @@
+---
+title: "Power & performance"
+description: Power plan, CPU settings, timer resolution, and device power savings configured by WinSux
+---
+
+WinSux replaces all power plans with a single custom plan derived from Ultimate Performance, locks the CPU to 100% state at all times, disables power management on every enumerated device, and installs a timer resolution service to minimise scheduling jitter.
+
+## Power plan
+
+WinSux duplicates the built-in Ultimate Performance scheme using a fixed, memorable GUID, activates it, and then deletes all other power plans from the system.
+
+```powershell
+# Duplicate Ultimate Performance (e9a42b02-...) as a custom GUID
+powercfg /duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61 99999999-9999-9999-9999-999999999999
+
+# Activate the new plan
+powercfg /SETACTIVE 99999999-9999-9999-9999-999999999999
+
+# Delete all other plans (including the originals)
+$plans = powercfg /L
+foreach ($plan in $plans) {
+    powercfg /delete $plan
+}
+```
+
+Hibernate, Sleep, and Fast Startup are all disabled:
+
+```powershell
+powercfg /hibernate off
+```
+
+```reg
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Power]
+"HibernateEnabled"=dword:00000000
+"HibernateEnabledDefault"=dword:00000000
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Session Manager\Power]
+"HiberbootEnabled"=dword:00000000
+```
+
+The Sleep and Lock options are also removed from the power button flyout menu:
+
+```reg
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FlyoutMenuSettings]
+"ShowSleepOption"=dword:00000000
+"ShowLockOption"=dword:00000000
+```
+
+---
+
+## CPU settings
+
+All processor power management settings are applied to both AC (plugged in) and DC (battery) index values.
+
+| Setting | Value | Effect |
+|---------|-------|--------|
+| Minimum processor state | 100% | CPU never clocks down, even at idle |
+| Maximum processor state | 100% | CPU cannot be throttled below maximum frequency |
+| System cooling policy | Active | Fan runs actively; passive (throttle-before-fan) disabled |
+| Core parking minimum | 100% | All CPU cores remain unparked at all times |
+| Core parking maximum | 100% | Parking upper bound also set to 100% |
+
+The core parking settings (`0cc5b647` and `ea062031`) are hidden by default. WinSux unhides them before writing:
+
+```powershell
+# Unhide core parking min
+reg add "HKLM\System\ControlSet001\Control\Power\PowerSettings\54533251-82be-4824-96c1-47b60b740d00\0cc5b647-c1df-4637-891a-dec35c318583" /v "Attributes" /t REG_DWORD /d "0" /f
+
+# Unhide core parking max
+reg add "HKLM\System\ControlSet001\Control\Power\PowerSettings\54533251-82be-4824-96c1-47b60b740d00\ea062031-0e34-4ff1-9b6d-eb1059334028" /v "Attributes" /t REG_DWORD /d "0" /f
+```
+
+### Power throttling
+
+Power Throttling is disabled system-wide. This prevents Windows from reducing CPU frequency for background processes:
+
+```reg
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling]
+"PowerThrottlingOff"=dword:00000001
+```
+
+---
+
+## Sleep and display
+
+| Setting | Value | Effect |
+|---------|-------|--------|
+| Sleep after | 0 (never) | System never sleeps automatically |
+| Hibernate after | 0 (never) | System never hibernates automatically |
+| Hybrid sleep | Off | No hybrid sleep state |
+| Allow wake timers | Disabled | Scheduled tasks cannot wake the system |
+| Turn off display after | 600 seconds (10 minutes) | Display turns off for OLED burn-in protection |
+| Display brightness | 100% | Full brightness at all times |
+| Dimmed display brightness | 100% | Dimmed state also set to full brightness |
+| Adaptive brightness | Off | Ambient light sensor does not adjust brightness |
+| Start menu power button | Shut Down (2) | Power button shuts down instead of sleeping |
+
+---
+
+## USB settings
+
+The Hub Selective Suspend timeout setting is hidden by default and is unhidden before being set:
+
+```powershell
+# Unhide hub selective suspend timeout
+reg add "HKLM\System\ControlSet001\Control\Power\PowerSettings\2a737441-1930-4402-8d77-b2bebba308a3\0853a681-27c8-4100-a2fd-82013e970683" /v "Attributes" /t REG_DWORD /d "0" /f
+
+# Unhide USB 3 Link Power Management
+reg add "HKLM\System\ControlSet001\Control\Power\PowerSettings\2a737441-1930-4402-8d77-b2bebba308a3\d4e98f31-5ffe-4ce1-be31-1b38b384c009" /v "Attributes" /t REG_DWORD /d "0" /f
+```
+
+| Setting | Value | Effect |
+|---------|-------|--------|
+| Hub Selective Suspend timeout | 0 ms | No delay before suspend is considered; combined with suspend disabled below |
+| USB Selective Suspend | Disabled | USB devices are never suspended to save power |
+| USB 3 Link Power Management | Off | USB 3 ports do not use link-level power saving |
+
+---
+
+## PCI Express
+
+```powershell
+# PCI Express - Link State Power Management: Off
+powercfg /setacvalueindex 99999999-9999-9999-9999-999999999999 \
+  501a4d13-42af-4429-9fd1-a8218c268e20 \
+  ee12f906-d277-404b-b6da-e5fa1a576df5 000
+```
+
+PCI Express Link State Power Management is set to Off. This prevents PCIe devices (including GPUs and NVMe drives) from entering lower power states.
+
+---
+
+## GPU-specific power settings
+
+These settings are applied to the active power plan via `powercfg` and cover vendor-specific sub-settings that appear only on systems with the relevant hardware.
+
+| GPU vendor | Setting | Value |
+|-----------|---------|-------|
+| Intel | Graphics power plan | Maximum Performance (2) |
+| AMD | Power slider overlay | Best Performance (3) |
+| ATI | PowerPlay settings | Maximize Performance (1) |
+| All | Switchable Dynamic Graphics | Maximize Performance (3) |
+
+---
+
+## Device power savings
+
+WinSux iterates over all enumerated devices in four bus classes and disables every power management option on each one.
+
+<AccordionGroup>
+  <Accordion title="Network adapter power settings">
+
+Applied to all keys under `HKLM:\SYSTEM\ControlSet001\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}`:
+
+| Registry value | Data | Effect |
+|---------------|------|--------|
+| `PnPCapabilities` | `24` | Disables wake-on-LAN and power management |
+| `AdvancedEEE` | `"0"` | Disables Advanced Energy Efficient Ethernet |
+| `*EEE` | `"0"` | Disables Energy Efficient Ethernet |
+| `EEELinkAdvertisement` | `"0"` | Disables EEE link advertisement |
+| `SipsEnabled` | `"0"` | Disables system idle power saver |
+| `ULPMode` | `"0"` | Disables ultra low power mode |
+| `GigaLite` | `"0"` | Disables GigaLite |
+| `EnableGreenEthernet` | `"0"` | Disables Green Ethernet |
+| `PowerSavingMode` | `"0"` | Disables power saving mode |
+| `S5WakeOnLan` | `"0"` | Disables wake from S5 power state |
+| `*WakeOnMagicPacket` | `"0"` | Disables wake on magic packet |
+| `*ModernStandbyWoLMagicPacket` | `"0"` | Disables Modern Standby wake on magic packet |
+| `*WakeOnPattern` | `"0"` | Disables wake on pattern match |
+| `WakeOnLink` | `"0"` | Disables wake on link activity |
+
+  </Accordion>
+  <Accordion title="ACPI, HID, PCI, USB device power settings">
+
+Applied to all `Device Parameters` subkeys under each bus in `HKLM:\SYSTEM\ControlSet001\Enum\{ACPI,HID,PCI,USB}`:
+
+| Registry value | Data | Effect |
+|---------------|------|--------|
+| `EnhancedPowerManagementEnabled` | `0` | Disables enhanced power management |
+| `SelectiveSuspendEnabled` | `0x00` | Disables selective suspend |
+| `SelectiveSuspendOn` | `0` | Additional selective suspend disable |
+| `WaitWakeEnabled` | `0` | Disables wake events from this device |
+
+WDF (Windows Driver Framework) subkeys also have `IdleInWorkingState=0` set to prevent idle power transitions.
+
+  </Accordion>
+  <Accordion title="NVMe and SCSI write cache settings">
+
+Applied to `Device Parameters\Disk` subkeys under `HKLM:\SYSTEM\ControlSet001\Enum\{NVME,SCSI}`:
+
+```reg
+"CacheIsPowerProtected"=dword:00000001
+```
+
+Setting `CacheIsPowerProtected=1` tells Windows the drive's write cache is protected against power loss, which disables the "Turn off Windows write-cache buffer flushing on the device" safety mechanism. This can improve write performance but risks data loss if power is cut unexpectedly.
+
+<Warning>
+  Disabling write-cache buffer flushing on drives that are not genuinely power-loss protected (e.g. consumer NVMe drives without capacitor backup) risks data corruption or loss on unexpected power failure.
+</Warning>
+
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Timer Resolution Service
+
+The system timer normally runs at approximately 15.6 ms (64 Hz). WinSux installs a persistent Windows service that locks it to the minimum interval supported by the hardware — typically 0.5 ms (2000 Hz) on modern systems.
+
+**Why this matters:** A coarser timer means the scheduler wakes up less often, which introduces jitter into frame delivery, audio callbacks, and other latency-sensitive operations. Locking the timer to maximum resolution reduces this jitter.
+
+### Compilation and installation
+
+The service is compiled from source at install time using the .NET Framework 4.x C# compiler:
+
+```powershell
+# Compile
+Start-Process -Wait "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe" `
+  -ArgumentList "-out:C:\Windows\SetTimerResolutionService.exe C:\Windows\Temp\settimerresolutionservice.cs"
+
+# Install and configure
+New-Service -Name "Set Timer Resolution Service" `
+  -BinaryPathName "C:\Windows\SetTimerResolutionService.exe"
+Set-Service -Name "Set Timer Resolution Service" -StartupType Auto
+Set-Service -Name "Set Timer Resolution Service" -Status Running
+```
+
+### How the service works
+
+On start, the service calls `NtQueryTimerResolution` to find the hardware minimum interval (`MaximumResolution` in the API, confusingly — the variable name refers to maximum resolution, i.e. the smallest interval), then calls `NtSetTimerResolution` to lock to that value:
+
+```csharp
+[DllImport("ntdll.dll", SetLastError=true)]
+static extern int NtSetTimerResolution(uint DesiredResolution, bool SetResolution, out uint CurrentResolution);
+
+[DllImport("ntdll.dll", SetLastError=true)]
+static extern int NtQueryTimerResolution(out uint MinimumResolution, out uint MaximumResolution, out uint ActualResolution);
+
+void SetMaximumResolution()
+{
+    uint actual = 0;
+    NtSetTimerResolution(this.MaximumResolution, true, out actual);
+}
+```
+
+### Global timer resolution requests
+
+`GlobalTimerResolutionRequests` is enabled so that any process requesting a high-resolution timer is honoured system-wide rather than only within its own process context:
+
+```reg
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Session Manager\kernel]
+"GlobalTimerResolutionRequests"=dword:00000001
+```
+
+---
+
+## MSI mode for GPUs
+
+Message Signaled Interrupts (MSI) are enabled for all GPU devices. MSI replaces the legacy line-based interrupt delivery mechanism with in-band PCI messages, which eliminates shared IRQ contention and can reduce interrupt latency.
+
+WinSux enumerates all Display class devices via `Get-PnpDevice -Class Display` and writes the MSI key for each:
+
+```powershell
+$gpuDevices = Get-PnpDevice -Class Display
+foreach ($gpu in $gpuDevices) {
+    $instanceID = $gpu.InstanceId
+    reg add "HKLM\SYSTEM\ControlSet001\Enum\$instanceID\Device Parameters\Interrupt Management\MessageSignaledInterruptProperties" `
+      /v "MSISupported" /t REG_DWORD /d "1" /f
+}
+```
+
+<Note>
+  A restart is required for MSI mode changes to take effect. WinSux performs a final restart at the end of `steptwo.ps1`.
+</Note>

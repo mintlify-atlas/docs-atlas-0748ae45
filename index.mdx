@@ -1,97 +1,59 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "WinSux — Windows Optimization for Power Users"
+description: "One-click Windows 10/11 debloat, optimization, and performance tuning. Install essentials, remove bloatware, and configure your system for maximum performance."
 ---
 
-## Setting up
+WinSux is a one-click PowerShell script suite that transforms a fresh Windows 10/11 install into a lean, high-performance system. It installs essential software, removes bloatware, configures security settings, installs your GPU drivers with debloating, and optimizes power settings — all automatically.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Run WinSux on your Windows machine in minutes
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="How It Works" icon="gears" href="/how-it-works/overview">
+    Understand the three-phase execution process
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="What Gets Configured" icon="sliders" href="/configuration/software-installed">
+    See every change WinSux makes to your system
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="GPU Drivers" icon="display" href="/drivers/nvidia">
+    Install debloated NVIDIA, AMD, or Intel drivers
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## Get up and running
 
-Everything you need to create world-class documentation.
+<Steps>
+  <Step title="Open an elevated PowerShell window">
+    Right-click **Start**, select **Terminal (Admin)** or **Windows PowerShell (Admin)**. WinSux requires Administrator privileges.
+  </Step>
+  <Step title="Run the one-liner">
+    Paste this command and press Enter:
+    ```powershell
+    iwr https://github.com/FR33THYFR33THY/WinSux/raw/refs/heads/main/WinSux.ps1 -useb | iex
+    ```
+  </Step>
+  <Step title="Follow the prompts">
+    WinSux runs automatically. When prompted to select your GPU brand for driver installation, choose NVIDIA, AMD, Intel, or skip.
+  </Step>
+  <Step title="Let it restart">
+    The script reboots into Safe Mode to run DDU (Display Driver Uninstaller), then reboots again to complete final configuration. No input required between restarts.
+  </Step>
+</Steps>
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+<Note>
+  WinSux requires an active internet connection and Windows 10/11 (Home, Pro, LTSC, IoT, or Server editions). Run it on a fresh Windows install for best results.
+</Note>
 
-## Need inspiration?
+## What WinSux does
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+WinSux makes hundreds of targeted changes across three phases:
+
+- **Installs** 7-Zip, Google Chrome, DirectX, and Visual C++ runtimes (2005–2022)
+- **Removes** Microsoft Edge, OneDrive, most UWP apps, and unnecessary Windows features
+- **Configures** Windows Defender, SmartScreen, UAC, and privacy settings
+- **Optimizes** power plan (Ultimate Performance), CPU core parking, and timer resolution
+- **Installs** your GPU driver cleanly after DDU wipes old drivers in Safe Mode
+
+<Tip>
+  For graphics-specific tweaks beyond driver installation, see the companion [Ultimate](https://github.com/FR33THYFR33THY/Ultimate) repository which handles additional GPU scripts.
+</Tip>

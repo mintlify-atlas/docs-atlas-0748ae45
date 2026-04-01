@@ -1,0 +1,55 @@
+{
+  "projectType": "cli-tool",
+  "projectName": "WinSux",
+  "projectDescription": "A one-click Windows optimization and debloat script suite for power users that installs essential software, removes bloatware, and configures Windows 10/11 for maximum performance.",
+  "theme": "aspen",
+  "primaryColor": "#fc0434",
+  "lightColor": "#fc7494",
+  "darkColor": null,
+  "navigation": {
+    "groups": [
+      {
+        "group": "Get Started",
+        "pages": ["introduction", "quickstart"]
+      },
+      {
+        "group": "How It Works",
+        "pages": ["how-it-works/overview", "how-it-works/three-steps"]
+      },
+      {
+        "group": "What Gets Configured",
+        "pages": [
+          "configuration/software-installed",
+          "configuration/windows-settings",
+          "configuration/security",
+          "configuration/power-performance"
+        ]
+      },
+      {
+        "group": "GPU Drivers",
+        "pages": ["drivers/nvidia", "drivers/amd", "drivers/intel"]
+      },
+      {
+        "group": "Troubleshooting",
+        "pages": ["troubleshooting/common-issues", "troubleshooting/faq"]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "One-click Windows 10/11 optimization via PowerShell",
+    "Automated software installation (7-Zip, Chrome, DirectX, VC++ runtimes)",
+    "Bloatware removal (Edge, OneDrive, UWP apps, legacy Windows features)",
+    "Windows Defender and security settings configuration",
+    "GPU driver installation with debloating for NVIDIA, AMD, and Intel",
+    "Power plan optimization with Ultimate Performance and CPU unparking",
+    "Timer resolution service for reduced input latency",
+    "Three-phase execution: initial setup → safe mode DDU → final configuration"
+  ],
+  "publicApiSurface": [
+    "iwr https://github.com/FR33THYFR33THY/WinSux/raw/refs/heads/main/WinSux.ps1 -useb | iex",
+    "WinSux.ps1 (main entry point — run as Administrator)",
+    "AllowScripts.cmd (enable/disable PowerShell script execution)",
+    "Temp/stepone.ps1 (safe mode phase — DDU driver removal + security hardening)",
+    "Temp/steptwo.ps1 (normal boot phase — final configuration + GPU driver install)"
+  ]
+}
